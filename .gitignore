@@ -1,0 +1,201 @@
+# ============================================================================
+# Python
+# ============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ============================================================================
+# Virtual Environments
+# ============================================================================
+venv/
+env/
+ENV/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ============================================================================
+# Environment Variables & Secrets (CRITICAL!)
+# ============================================================================
+.env
+.env.local
+.env.*.local
+*.env
+
+# Credentials and secrets
+credentials.json
+token.json
+.gmail_token.json
+*.pem
+*.key
+*.crt
+*.p12
+secrets.json
+config.json
+config.local.json
+
+# ============================================================================
+# Logs
+# ============================================================================
+*.log
+logs/
+*.log.*
+
+# ============================================================================
+# Database Files (SQLite)
+# ============================================================================
+*.db
+*.sqlite
+*.sqlite3
+database/*.db
+database/*.sqlite3
+
+# ============================================================================
+# Obsidian Vault (Keep structure, ignore user content)
+# ============================================================================
+# Keep vault folder but ignore most contents
+vault/Inbox/Drop/*
+vault/Needs_Action/*
+vault/Processing/*
+vault/Done/*
+vault/Pending_Approval/*
+vault/Approved/*
+vault/Rejected/*
+vault/Needs_Revision/*
+vault/Logs/*
+
+# Keep vault structure files
+!vault/.gitkeep
+!vault/Inbox/.gitkeep
+!vault/Inbox/Drop/.gitkeep
+!vault/Needs_Action/.gitkeep
+!vault/Processing/.gitkeep
+!vault/Done/.gitkeep
+!vault/Pending_Approval/.gitkeep
+!vault/Approved/.gitkeep
+!vault/Rejected/.gitkeep
+!vault/Needs_Revision/.gitkeep
+!vault/Logs/.gitkeep
+
+# Keep template vault files
+vault/Dashboard.md
+vault/Company_Handbook.md
+vault/Business_Goals.md
+
+# Obsidian specific
+.vault/
+.trash/
+.obsidian/
+
+# ============================================================================
+# IDE & Editors
+# ============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# ============================================================================
+# OS Generated Files
+# ============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ============================================================================
+# Process IDs & Lock Files
+# ============================================================================
+*.pid
+*.pid.lock
+*.lock
+
+# ============================================================================
+# Temporary Files
+# ============================================================================
+*.tmp
+*.temp
+~$*.doc*
+~$*.xls*
+~$*.pptx*
+
+# ============================================================================
+# Test & Coverage
+# ============================================================================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# ============================================================================
+# Jupyter Notebook
+# ============================================================================
+.ipynb_checkpoints
+
+# ============================================================================
+# pyenv
+# ============================================================================
+.python-version
+
+# ============================================================================
+# UV Package Manager
+# ============================================================================
+uv.lock
+
+# ============================================================================
+# KEEP THESE (Important project files)
+# ============================================================================
+# Config files that should be committed
+!pyproject.toml
+!requirements.txt
+!setup.py
+!README.md
+!QUICKSTART.md
+
+# Example files (templates for users)
+!*.example
+!*.template
+!config.example.json
+!config.example.toml
+
+# Documentation
+!*.md
+!docs/
+!documentation/
+
+# ============================================================================
+# NOTE: The following are intentionally ignored for security:
+# - .env files (contain API keys, passwords, database URLs)
+# - credentials.json (OAuth credentials)
+# - token.json (authentication tokens)
+# - *.db (database files may contain sensitive data)
+# - logs/ (may contain sensitive information)
+# ============================================================================
