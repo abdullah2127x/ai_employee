@@ -310,30 +310,6 @@ Remember to follow the Company Handbook rules and Business Goals.
         except Exception as e:
             self.logger.error(f"❌ Error triggering Claude: {e}", exc_info=True)
 
-    def _get_claude_env(self) -> dict:
-        """
-        Get environment variables for Claude Code execution.
-        
-        Ensures ANTHROPIC_API_KEY is available from .env file.
-        """
-        import os
-        from dotenv import load_dotenv
-        
-        # Start with current environment
-        env = os.environ.copy()
-        
-        # Load .env file if it exists
-        env_file = Path(__file__).parent / '.env'
-        if env_file.exists():
-            load_dotenv(str(env_file))
-        
-        # Ensure API key is in environment
-        api_key = os.getenv('ANTHROPIC_API_KEY')
-        if api_key:
-            env['ANTHROPIC_API_KEY'] = api_key
-        
-        return env
-
 
 class ApprovedMonitor(FileSystemEventHandler):
     """
