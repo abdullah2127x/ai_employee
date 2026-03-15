@@ -33,13 +33,13 @@ from core import settings, get_settings
 logger = setup_logging(settings.log_dir)
 
 # Database path
-DB_PATH = project_root / 'database' / 'tasks.db'
+DB_PATH = project_root / "database" / "tasks.db"
 
 
 class EventRouter:
     """
     Routes events to appropriate handlers based on file type and metadata.
-    
+
     Analyzes incoming files and determines:
     - What type of event this is
     - Which Claude Skill should handle it
@@ -63,93 +63,93 @@ class EventRouter:
             Classification result with skill assignment and routing info
         """
         # Read metadata
-        content = metadata_path.read_text(encoding='utf-8')
-        
+        content = metadata_path.read_text(encoding="utf-8")
+
         # Parse frontmatter (simple YAML-like parsing)
         metadata = self._parse_frontmatter(content)
-        
-        event_type = metadata.get('type', 'unknown')
-        priority = metadata.get('priority', 'normal')
-        
+
+        event_type = metadata.get("type", "unknown")
+        priority = metadata.get("priority", "normal")
+
         # Determine which skill should handle this
         skill_assignment = self._assign_skill(event_type, metadata)
-        
+
         # Determine if approval is required
         approval_required = self._check_approval_required(event_type, metadata)
-        
+
         return {
-            'event_type': event_type,
-            'priority': priority,
-            'assigned_skill': skill_assignment,
-            'approval_required': approval_required,
-            'metadata': metadata
+            "event_type": event_type,
+            "priority": priority,
+            "assigned_skill": skill_assignment,
+            "approval_required": approval_required,
+            "metadata": metadata,
         }
 
     def _parse_frontmatter(self, content: str) -> Dict[str, Any]:
         """Parse YAML frontmatter from markdown content."""
         metadata = {}
-        lines = content.split('\n')
-        
-        if not lines or lines[0].strip() != '---':
+        lines = content.split("\n")
+
+        if not lines or lines[0].strip() != "---":
             return metadata
-        
+
         in_frontmatter = False
         for line in lines[1:]:
-            if line.strip() == '---':
+            if line.strip() == "---":
                 break
-            
-            if ':' in line:
-                key, value = line.split(':', 1)
+
+            if ":" in line:
+                key, value = line.split(":", 1)
                 key = key.strip()
                 value = value.strip()
-                
+
                 # Parse value types
-                if value.lower() == 'true':
+                if value.lower() == "true":
                     value = True
-                elif value.lower() == 'false':
+                elif value.lower() == "false":
                     value = False
-                elif value.startswith('[') and value.endswith(']'):
+                elif value.startswith("[") and value.endswith("]"):
                     # Simple list parsing
-                    value = [v.strip() for v in value[1:-1].split(',')]
-                
+                    value = [v.strip() for v in value[1:-1].split(",")]
+
                 metadata[key] = value
-        
+
         return metadata
 
     def _assign_skill(self, event_type: str, metadata: Dict) -> str:
         """Assign appropriate skill based on event type."""
         skill_mapping = {
-            'file_drop': 'file-processor',
-            'email': 'email-triage',
-            'whatsapp_message': 'message-processor',
-            'invoice': 'invoice-generator',
-            'payment_request': 'payment-processor',
-            'document': 'document-analyzer',
+            "file_drop": "file-processor",
+            "email": "email-triage",
+            "whatsapp_message": "message-processor",
+            "invoice": "invoice-generator",
+            "payment_request": "payment-processor",
+            "document": "document-analyzer",
         }
-        
-        return skill_mapping.get(event_type, 'file-processor')
+
+        return skill_mapping.get(event_type, "file-processor")
 
     def _check_approval_required(self, event_type: str, metadata: Dict) -> bool:
         """Check if this event type requires human approval."""
         # Events that always require approval
-        approval_types = ['payment_request', 'invoice']
-        
+        approval_types = ["payment_request", "invoice"]
+
         if event_type in approval_types:
             return True
-        
+
         # Check for specific keywords
-        keywords = metadata.get('keywords', [])
+        keywords = metadata.get("keywords", [])
         if isinstance(keywords, str):
             keywords = [keywords]
-        
-        approval_keywords = ['payment', 'approve', 'authorize', 'urgent']
+
+        approval_keywords = ["payment", "approve", "authorize", "urgent"]
         return any(kw in str(keywords).lower() for kw in approval_keywords)
 
 
 class NeedsActionMonitor(FileSystemEventHandler):
     """
     Monitors Needs_Action folder for new items requiring processing.
-    
+
     When a new file is detected:
     1. Classifies the event
     2. Updates task state in database
@@ -162,11 +162,11 @@ class NeedsActionMonitor(FileSystemEventHandler):
         self.vault_path = vault_path
         self.router = router
         self.logger = logging.getLogger(__name__)
-        
+
         # Folders
-        self.needs_action = vault_path / 'Needs_Action'
-        self.processing = vault_path / 'Processing'
-        
+        self.needs_action = vault_path / "Needs_Action"
+        self.processing = vault_path / "Processing"
+
         # Track files being processed to avoid duplicates
         self.processing_files = set()
 
@@ -177,7 +177,7 @@ class NeedsActionMonitor(FileSystemEventHandler):
 
         # Ignore system files
         src_path = Path(event.src_path)
-        if src_path.name.startswith('.') or src_path.suffix != '.md':
+        if src_path.name.startswith(".") or src_path.suffix != ".md":
             return
 
         # Avoid duplicate processing
@@ -186,18 +186,18 @@ class NeedsActionMonitor(FileSystemEventHandler):
             return
 
         self.processing_files.add(src_path.name)
-        
+
         try:
             # Wait for file to be fully written
             time.sleep(0.5)
-            
+
             if not src_path.exists():
                 self.logger.warning(f"File disappeared: {src_path.name}")
                 return
 
             # Process the file
             self._process_action_file(src_path)
-            
+
         except Exception as e:
             self.logger.error(f"Error processing {src_path.name}: {e}", exc_info=True)
         finally:
@@ -211,24 +211,26 @@ class NeedsActionMonitor(FileSystemEventHandler):
             file_path: Path to the action file
         """
         self.logger.info(f"📥 Processing: {file_path.name}")
-        
+
         # Classify the event
         classification = self.router.classify_event(file_path)
-        
+
         self.logger.info(f"   Type: {classification['event_type']}")
         self.logger.info(f"   Priority: {classification['priority']}")
         self.logger.info(f"   Skill: {classification['assigned_skill']}")
-        self.logger.info(f"   Approval: {'Required' if classification['approval_required'] else 'Not required'}")
-        
+        self.logger.info(
+            f"   Approval: {'Required' if classification['approval_required'] else 'Not required'}"
+        )
+
         # Extract task_id from metadata
-        content = file_path.read_text(encoding='utf-8')
+        content = file_path.read_text(encoding="utf-8")
         metadata = self.router._parse_frontmatter(content)
-        task_id = metadata.get('task_id', f"task_{int(time.time())}")
-        
+        task_id = metadata.get("task_id", f"task_{int(time.time())}")
+
         # Update task in database
-        self.db.update_task_status(task_id, 'processing')
-        self.db.assign_skill(task_id, classification['assigned_skill'])
-        
+        self.db.update_task_status(task_id, "processing")
+        self.db.assign_skill(task_id, classification["assigned_skill"])
+
         # Move to Processing folder
         processing_path = self.processing / file_path.name
         try:
@@ -237,24 +239,28 @@ class NeedsActionMonitor(FileSystemEventHandler):
         except Exception as e:
             self.logger.error(f"Error moving file: {e}")
             processing_path = file_path
-        
+
         # Trigger Claude Code
         self._trigger_claude_skill(processing_path, classification)
 
     def _trigger_claude_skill(self, file_path: Path, classification: Dict):
         """
         Trigger Claude Code with the appropriate skill.
+        
+        Claude Code automatically loads skills from .claude/skills/ directory.
+        Skills are referenced by name in the prompt.
 
         Args:
             file_path: Path to file in Processing folder
             classification: Event classification result
         """
-        skill = classification['assigned_skill']
-        
+        skill = classification["assigned_skill"]
+
         self.logger.info(f"🤖 Triggering Claude skill: {skill}")
-        
+
         try:
-            # Build Claude command
+            # Build Claude command with skill reference
+            # Claude automatically loads skills from .claude/skills/{skill}/SKILL.md
             prompt = f"""Use the {skill} skill to process this file: {file_path.name}
 
 File location: {file_path}
@@ -270,31 +276,33 @@ Instructions:
 Remember to follow the Company Handbook rules and Business Goals.
 """
 
-            # Run Claude Code
+            # Run Claude Code with proper flags
+            # Note: Claude Code loads skills automatically from .claude/skills/ directory
             result = subprocess.run(
                 [
-                    'claude',
-                    '--cwd', str(self.vault_path),
+                    "claude",
+                    "-p",  # Print mode - execute prompt and exit
+                    "--output-format", "text",  # Plain text output
                     prompt
                 ],
+                cwd=str(self.vault_path),  # Set working directory
                 capture_output=True,
                 text=True,
-                timeout=300  # 5 minute timeout
+                timeout=300,  # 5 minute timeout
+                env=self._get_claude_env()  # Ensure API key is available
             )
-            
+
             if result.returncode == 0:
                 self.logger.info(f"✅ Claude skill completed successfully")
                 if result.stdout:
                     self.logger.debug(f"Output: {result.stdout[:500]}...")
             else:
                 self.logger.error(f"❌ Claude skill failed: {result.stderr}")
-                
+
         except subprocess.TimeoutExpired:
             self.logger.error(f"⏱️  Claude skill timed out (5 min limit)")
             self.db.update_task_status(
-                self._get_task_id(file_path),
-                'failed',
-                error_message='Claude Code timeout'
+                self._get_task_id(file_path), "failed", error_message="Claude Code timeout"
             )
         except FileNotFoundError:
             self.logger.error("❌ Claude Code not found. Is it installed?")
@@ -302,11 +310,35 @@ Remember to follow the Company Handbook rules and Business Goals.
         except Exception as e:
             self.logger.error(f"❌ Error triggering Claude: {e}", exc_info=True)
 
+    def _get_claude_env(self) -> dict:
+        """
+        Get environment variables for Claude Code execution.
+        
+        Ensures ANTHROPIC_API_KEY is available from .env file.
+        """
+        import os
+        from dotenv import load_dotenv
+        
+        # Start with current environment
+        env = os.environ.copy()
+        
+        # Load .env file if it exists
+        env_file = Path(__file__).parent / '.env'
+        if env_file.exists():
+            load_dotenv(str(env_file))
+        
+        # Ensure API key is in environment
+        api_key = os.getenv('ANTHROPIC_API_KEY')
+        if api_key:
+            env['ANTHROPIC_API_KEY'] = api_key
+        
+        return env
+
 
 class ApprovedMonitor(FileSystemEventHandler):
     """
     Monitors Approved folder for items ready to execute.
-    
+
     When a file appears in Approved:
     1. Reads the approval request
     2. Executes the requested action via MCP or direct action
@@ -318,9 +350,9 @@ class ApprovedMonitor(FileSystemEventHandler):
         self.db = db
         self.vault_path = vault_path
         self.logger = logging.getLogger(__name__)
-        
-        self.approved = vault_path / 'Approved'
-        self.done = vault_path / 'Done'
+
+        self.approved = vault_path / "Approved"
+        self.done = vault_path / "Done"
         self.processing_files = set()
 
     def on_created(self, event):
@@ -329,22 +361,22 @@ class ApprovedMonitor(FileSystemEventHandler):
             return
 
         src_path = Path(event.src_path)
-        if src_path.name.startswith('.') or src_path.suffix != '.md':
+        if src_path.name.startswith(".") or src_path.suffix != ".md":
             return
 
         if src_path.name in self.processing_files:
             return
 
         self.processing_files.add(src_path.name)
-        
+
         try:
             time.sleep(0.5)
-            
+
             if not src_path.exists():
                 return
 
             self._execute_approved_action(src_path)
-            
+
         except Exception as e:
             self.logger.error(f"Error executing approved action: {e}", exc_info=True)
         finally:
@@ -353,19 +385,19 @@ class ApprovedMonitor(FileSystemEventHandler):
     def _execute_approved_action(self, approval_file: Path):
         """Execute an approved action."""
         self.logger.info(f"✅ Executing approved action: {approval_file.name}")
-        
+
         # Read approval file
-        content = approval_file.read_text(encoding='utf-8')
+        content = approval_file.read_text(encoding="utf-8")
         metadata = self._parse_frontmatter(content)
-        
-        action_type = metadata.get('action', 'unknown')
-        
+
+        action_type = metadata.get("action", "unknown")
+
         self.logger.info(f"   Action type: {action_type}")
-        
+
         # Execute based on action type
-        if action_type == 'send_email':
+        if action_type == "send_email":
             self._execute_email_send(approval_file, metadata)
-        elif action_type == 'payment':
+        elif action_type == "payment":
             self._execute_payment(approval_file, metadata)
         else:
             self.logger.warning(f"Unknown action type: {action_type}")
@@ -374,14 +406,14 @@ class ApprovedMonitor(FileSystemEventHandler):
     def _execute_email_send(self, approval_file: Path, metadata: Dict):
         """Execute email send action."""
         self.logger.info("   📧 Sending email...")
-        
+
         # For now, log the action (actual sending would use MCP)
-        to = metadata.get('to', 'unknown')
-        subject = metadata.get('subject', 'No subject')
-        
+        to = metadata.get("to", "unknown")
+        subject = metadata.get("subject", "No subject")
+
         self.logger.info(f"   To: {to}")
         self.logger.info(f"   Subject: {subject}")
-        
+
         # TODO: Integrate with email MCP server
         # For now, just move to Done
         self._complete_action(approval_file, "Email would be sent via MCP")
@@ -389,16 +421,18 @@ class ApprovedMonitor(FileSystemEventHandler):
     def _execute_payment(self, approval_file: Path, metadata: Dict):
         """Execute payment action."""
         self.logger.info("   💰 Processing payment...")
-        
-        amount = metadata.get('amount', 0)
-        recipient = metadata.get('recipient', 'unknown')
-        
+
+        amount = metadata.get("amount", 0)
+        recipient = metadata.get("recipient", "unknown")
+
         self.logger.info(f"   Amount: ${amount}")
         self.logger.info(f"   Recipient: {recipient}")
-        
+
         # TODO: Integrate with payment MCP server
         # For now, just log
-        self._complete_action(approval_file, f"Payment of ${amount} to {recipient} would be processed")
+        self._complete_action(
+            approval_file, f"Payment of ${amount} to {recipient} would be processed"
+        )
 
     def _execute_generic_action(self, approval_file: Path, metadata: Dict):
         """Execute a generic approved action."""
@@ -414,37 +448,37 @@ class ApprovedMonitor(FileSystemEventHandler):
             self.logger.info(f"   ✅ Moved to Done/")
         except Exception as e:
             self.logger.error(f"Error moving file: {e}")
-        
+
         self.logger.info(f"   Result: {result}")
 
     def _parse_frontmatter(self, content: str) -> Dict:
         """Parse YAML frontmatter."""
         metadata = {}
-        lines = content.split('\n')
-        
-        if not lines or lines[0].strip() != '---':
+        lines = content.split("\n")
+
+        if not lines or lines[0].strip() != "---":
             return metadata
-        
+
         for line in lines[1:]:
-            if line.strip() == '---':
+            if line.strip() == "---":
                 break
-            if ':' in line:
-                key, value = line.split(':', 1)
+            if ":" in line:
+                key, value = line.split(":", 1)
                 metadata[key.strip()] = value.strip()
-        
+
         return metadata
 
     def _get_task_id(self, file_path: Path) -> str:
         """Extract task_id from filename or metadata."""
         # Try to get from metadata first
         try:
-            content = file_path.read_text(encoding='utf-8')
+            content = file_path.read_text(encoding="utf-8")
             metadata = self._parse_frontmatter(content)
-            if 'task_id' in metadata:
-                return metadata['task_id']
+            if "task_id" in metadata:
+                return metadata["task_id"]
         except:
             pass
-        
+
         # Fallback to filename-based ID
         return f"task_{int(time.time())}"
 
@@ -452,7 +486,7 @@ class ApprovedMonitor(FileSystemEventHandler):
 class Orchestrator:
     """
     Main orchestrator that coordinates all components.
-    
+
     Responsibilities:
     - Start/stop all watchers
     - Monitor folder state
@@ -470,36 +504,36 @@ class Orchestrator:
         """
         self.vault_path = vault_path or settings.vault_path
         self.config = config or {}
-        
+
         # Initialize database
         self.db = TaskDatabase(DB_PATH)
-        
+
         # Initialize event router
         self.router = EventRouter(self.db, self.vault_path)
-        
+
         # Folder monitors
         self.observers: List[Observer] = []
-        
+
         # Ensure vault structure exists
         self._setup_vault_structure()
-        
+
         self.logger = logging.getLogger(__name__)
 
     def _setup_vault_structure(self):
         """Ensure all required vault directories exist."""
         required_dirs = [
-            'Inbox',
-            'Inbox/Drop',
-            'Needs_Action',
-            'Processing',
-            'Done',
-            'Plans',
-            'Logs',
-            'Pending_Approval',
-            'Approved',
-            'Rejected',
-            'Needs_Revision',
-            'Accounting'
+            "Inbox",
+            "Inbox/Drop",
+            "Needs_Action",
+            "Processing",
+            "Done",
+            "Plans",
+            "Logs",
+            "Pending_Approval",
+            "Approved",
+            "Rejected",
+            "Needs_Revision",
+            "Accounting",
         ]
 
         for dir_name in required_dirs:
@@ -510,26 +544,22 @@ class Orchestrator:
     def start_file_monitors(self):
         """Start monitoring vault folders."""
         self.logger.info("👁️  Starting folder monitors...")
-        
+
         # Monitor Needs_Action folder
         needs_action_observer = Observer()
         needs_action_handler = NeedsActionMonitor(self.db, self.vault_path, self.router)
         needs_action_observer.schedule(
-            needs_action_handler,
-            str(self.vault_path / 'Needs_Action'),
-            recursive=False
+            needs_action_handler, str(self.vault_path / "Needs_Action"), recursive=False
         )
         needs_action_observer.start()
         self.observers.append(needs_action_observer)
         self.logger.info(f"   ✅ Monitoring: Needs_Action/")
-        
+
         # Monitor Approved folder
         approved_observer = Observer()
         approved_handler = ApprovedMonitor(self.db, self.vault_path)
         approved_observer.schedule(
-            approved_handler,
-            str(self.vault_path / 'Approved'),
-            recursive=False
+            approved_handler, str(self.vault_path / "Approved"), recursive=False
         )
         approved_observer.start()
         self.observers.append(approved_observer)
@@ -543,26 +573,26 @@ class Orchestrator:
         self.logger.info(f"Vault: {self.vault_path}")
         self.logger.info(f"Database: {DB_PATH}")
         self.logger.info("=" * 70)
-        
+
         # Start file monitors
         self.start_file_monitors()
-        
+
         # Start watchers (filesystem, gmail, etc.) in separate threads
         self._start_watchers()
-        
+
         self.logger.info("=" * 70)
         self.logger.info("✅ System is now running. Press Ctrl+C to stop.")
         self.logger.info("=" * 70)
-        
+
         try:
             while True:
                 time.sleep(1)
-                
+
                 # Periodic tasks could go here
                 # - Dashboard updates
                 # - Health checks
                 # - Cleanup old tasks
-                
+
         except KeyboardInterrupt:
             self.logger.info("\n⏹️  Received interrupt signal")
             self.stop()
@@ -570,16 +600,12 @@ class Orchestrator:
     def _start_watchers(self):
         """Start all configured watchers."""
         # Filesystem watcher
-        if self.config.get('enable_filesystem_watcher', True):
+        if self.config.get("enable_filesystem_watcher", True):
             from watchers import FilesystemWatcher
-            
-            drop_folder = self.vault_path / 'Inbox' / 'Drop'
-            fs_watcher = FilesystemWatcher(
-                str(self.vault_path),
-                str(drop_folder),
-                self.db
-            )
-            
+
+            drop_folder = self.vault_path / "Inbox" / "Drop"
+            fs_watcher = FilesystemWatcher(str(self.vault_path), str(drop_folder), self.db)
+
             # Run in background thread
             thread = threading.Thread(target=fs_watcher.run, daemon=True)
             thread.start()
@@ -588,12 +614,12 @@ class Orchestrator:
     def stop(self):
         """Stop all observers and cleanup."""
         self.logger.info("Stopping orchestrator...")
-        
+
         # Stop observers
         for observer in self.observers:
             observer.stop()
             observer.join()
-        
+
         self.logger.info("✅ Orchestrator stopped")
 
 
@@ -601,18 +627,11 @@ def main():
     """Main entry point."""
     import argparse
 
-    parser = argparse.ArgumentParser(description='AI Employee Orchestrator')
+    parser = argparse.ArgumentParser(description="AI Employee Orchestrator")
     parser.add_argument(
-        '--vault',
-        type=str,
-        default=None,
-        help='Path to Obsidian vault (default: from settings)'
+        "--vault", type=str, default=None, help="Path to Obsidian vault (default: from settings)"
     )
-    parser.add_argument(
-        '--config',
-        type=str,
-        help='Path to configuration file (JSON) (deprecated)'
-    )
+    parser.add_argument("--config", type=str, help="Path to configuration file (JSON) (deprecated)")
 
     args = parser.parse_args()
 
@@ -628,5 +647,5 @@ def main():
     orchestrator.run()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
