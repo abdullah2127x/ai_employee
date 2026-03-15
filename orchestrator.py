@@ -16,6 +16,7 @@ import subprocess
 import threading
 import json
 import logging
+import traceback
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List
@@ -280,7 +281,7 @@ Remember to follow the Company Handbook rules and Business Goals.
             # Note: Claude Code loads skills automatically from .claude/skills/ directory
             result = subprocess.run(
                 [
-                    "claude",
+                    "ccr code",
                     "-p",  # Print mode - execute prompt and exit
                     "--output-format", "text",  # Plain text output
                     prompt
@@ -575,17 +576,36 @@ class Orchestrator:
 
     def _start_watchers(self):
         """Start all configured watchers."""
+        self.logger.info("Starting watchers...")
+        
         # Filesystem watcher
         if self.config.get("enable_filesystem_watcher", True):
-            from watchers import FilesystemWatcher
+            try:
+                from watchers.filesystem_watcher import FilesystemWatcher
 
-            drop_folder = self.vault_path / "Inbox" / "Drop"
-            fs_watcher = FilesystemWatcher(str(self.vault_path), str(drop_folder), self.db)
+                drop_folder = self.vault_path / "Inbox" / "Drop"
+                drop_folder.mkdir(parents=True, exist_ok=True)
+                
+                self.logger.info(f"Creating FilesystemWatcher for: {drop_folder}")
+                fs_watcher = FilesystemWatcher(str(self.vault_path), str(drop_folder), self.db)
 
-            # Run in background thread
-            thread = threading.Thread(target=fs_watcher.run, daemon=True)
-            thread.start()
-            self.logger.info("✅ Filesystem watcher started (Inbox/Drop)")
+                # Run in background thread
+                thread = threading.Thread(target=fs_watcher.run, daemon=True, name="FilesystemWatcher")
+                thread.start()
+                
+                # Wait a moment for it to initialize
+                time.sleep(1)
+                
+                if thread.is_alive():
+                    self.logger.info("✅ Filesystem watcher started (Inbox/Drop)")
+                else:
+                    self.logger.error("❌ Filesystem watcher thread died immediately")
+                    
+            except Exception as e:
+                self.logger.error(f"❌ Error starting FilesystemWatcher: {e}")
+                self.logger.error(f"   Stack trace: {traceback.format_exc()}")
+        else:
+            self.logger.info("Filesystem watcher disabled in config")
 
     def stop(self):
         """Stop all observers and cleanup."""
