@@ -171,6 +171,30 @@ class NeedsActionMonitor(FileSystemEventHandler):
         # Track files being processed to avoid duplicates
         self.processing_files = set()
 
+    def _get_claude_env(self) -> dict:
+        """
+        Get environment variables for Claude Code execution.
+        
+        Ensures ANTHROPIC_API_KEY is available from .env file.
+        """
+        import os
+        from dotenv import load_dotenv
+        
+        # Start with current environment
+        env = os.environ.copy()
+        
+        # Load .env file if exists
+        env_file = Path(__file__).parent.parent / '.env'
+        if env_file.exists():
+            load_dotenv(str(env_file))
+        
+        # Ensure API key is in environment
+        api_key = os.getenv('ANTHROPIC_API_KEY')
+        if api_key:
+            env['ANTHROPIC_API_KEY'] = api_key
+        
+        return env
+
     def on_created(self, event):
         """Handle new file creation."""
         if event.is_directory:
@@ -235,8 +259,12 @@ class NeedsActionMonitor(FileSystemEventHandler):
         # Move to Processing folder
         processing_path = self.processing / file_path.name
         try:
-            file_path.rename(processing_path)
-            self.logger.info(f"   Moved to Processing/")
+            if file_path.exists():
+                file_path.rename(processing_path)
+                self.logger.info(f"   Moved to Processing/")
+            else:
+                self.logger.debug(f"   File already moved (by FilesystemWatcher)")
+                processing_path = file_path  # Use original path for Claude
         except Exception as e:
             self.logger.error(f"Error moving file: {e}")
             processing_path = file_path
