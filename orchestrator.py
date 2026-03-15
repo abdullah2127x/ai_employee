@@ -481,7 +481,10 @@ class Orchestrator:
         """
         self.vault_path = vault_path or settings.vault_path
         self.config = config or {}
-
+        
+        # Initialize logger first
+        self.logger = logging.getLogger(__name__)
+        
         # Initialize database
         self.db = TaskDatabase(DB_PATH)
 
@@ -493,8 +496,6 @@ class Orchestrator:
 
         # Ensure vault structure exists
         self._setup_vault_structure()
-
-        self.logger = logging.getLogger(__name__)
 
     def _setup_vault_structure(self):
         """Ensure all required vault directories exist."""
