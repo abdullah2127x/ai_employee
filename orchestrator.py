@@ -36,40 +36,34 @@ logger = setup_logging(settings.log_dir)
 DB_PATH = project_root / "database" / "tasks.db"
 
 # ── Your Claude command ───────────────────────────────────────────────────────
-# Change this to match exactly what works in your terminal.
-# Whatever command you type manually — put it here.
-# Examples:
-#   ["ccr", "code"]          ← your current setup
-#   ["claude"]               ← standard Claude Code
+# This must match EXACTLY what works in your terminal.
+# Your example: ["ccr", "code", "-p", "Hi"] with shell=True
 CLAUDE_COMMAND = ["ccr", "code"]
 
 
 # =============================================================================
-# Claude Invocation — One Simple Function
+# Claude Invocation — Matches Your Example Exactly
 # =============================================================================
 
 def invoke_claude(prompt: str, vault_path: Path, timeout: int = 300) -> subprocess.CompletedProcess:
     """
     Run Claude Code with a prompt.
     
-    shell=True is required on Windows because ccr is a .cmd wrapper.
-    Claude Code finds skills automatically via --cwd pointing to vault.
+    Matches the format from example_subprocess_claude.py exactly.
     """
-    # Build command as a string for shell=True
-    # We join the base command and add -p and --cwd
-    base = " ".join(CLAUDE_COMMAND)
-    cmd  = f'{base} -p "{prompt}" --cwd "{vault_path}"'
-
-    logger.debug(f"Invoking Claude: {cmd[:80]}...")
+    # Build command list - exactly like your example
+    cmd = CLAUDE_COMMAND + ["-p", prompt, "--cwd", str(vault_path)]
+    
+    logger.debug(f"Invoking Claude: {' '.join(cmd[:5])}...")
 
     try:
+        # Exactly like your example: shell=True, capture_output, text, timeout
         return subprocess.run(
             cmd,
-            shell=True,           # required on Windows for .cmd wrappers
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=str(vault_path),
+            shell=True,           # Required on Windows for .cmd wrappers
+            capture_output=True,  # Capture stdout and stderr
+            text=True,            # Return strings, not bytes
+            timeout=timeout,      # Give up after timeout seconds
         )
 
     except subprocess.TimeoutExpired:
