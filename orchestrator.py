@@ -124,17 +124,22 @@ class NeedsActionMonitor(FileSystemEventHandler):
     def _handle(self, file_path: Path):
         logger.info(f"📥 New item: {file_path.name}")
 
-        # Generate a task ID from timestamp
-        task_id = f"task_{int(time.time())}_{file_path.stem}"
-
-        # Check if task already exists (FilesystemWatcher may have created it)
+        # FilesystemWatcher already created the task with ID like:
+        # file_20260317_081226_abdullah.txt
+        # Extract that ID from the filename
+        timestamp_part = file_path.stem.replace("FILE_", "").replace("_", ":", 1).replace("_", " ")
+        task_id = f"file_{timestamp_part.replace(' ', '_').replace(':', '_')}"
+        
+        # Try to get existing task (created by FilesystemWatcher)
         existing_task = self.db.get_task(task_id)
+        
         if existing_task:
-            logger.info(f"   → Task already exists, skipping creation")
-            # Just update status to processing
+            logger.info(f"   → Found existing task: {task_id}")
             self.db.update_task_status(task_id, "processing")
         else:
-            # Record in database
+            # Fallback: create new task if FilesystemWatcher didn't
+            logger.info(f"   → Creating new task (FilesystemWatcher didn't)")
+            task_id = f"task_{int(time.time())}_{file_path.stem}"
             self.db.create_task(
                 task_id    = task_id,
                 task_type  = "incoming",
