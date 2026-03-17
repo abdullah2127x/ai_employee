@@ -54,25 +54,56 @@ def invoke_claude(prompt: str, vault_path: Path, timeout: int = 300) -> subproce
     # Build command list - exactly like your example
     cmd = CLAUDE_COMMAND + ["-p", prompt, "--cwd", str(vault_path)]
     
-    logger.debug(f"Invoking Claude: {' '.join(cmd[:5])}...")
+    # LOG EVERYTHING for debugging
+    logger.info("=" * 80)
+    logger.info("🔵 CLAUDE INVOCATION DETAILS")
+    logger.info("=" * 80)
+    logger.info(f"Command list: {cmd}")
+    logger.info(f"Command as string: {' '.join(cmd)}")
+    logger.info(f"Vault path: {vault_path}")
+    logger.info(f"Timeout: {timeout}s")
+    logger.info(f"Prompt (first 200 chars): {prompt[:200]}...")
+    logger.info("=" * 80)
 
     try:
+        logger.info("🔄 Running subprocess.run()...")
+        logger.info(f"   shell={True}")
+        logger.info(f"   capture_output={True}")
+        logger.info(f"   text={True}")
+        
         # Exactly like your example: shell=True, capture_output, text, timeout
-        return subprocess.run(
+        result = subprocess.run(
             cmd,
             shell=True,           # Required on Windows for .cmd wrappers
             capture_output=True,  # Capture stdout and stderr
             text=True,            # Return strings, not bytes
             timeout=timeout,      # Give up after timeout seconds
         )
+        
+        logger.info("✅ subprocess.run() completed")
+        logger.info(f"   Return code: {result.returncode}")
+        logger.info(f"   Stdout length: {len(result.stdout) if result.stdout else 0} chars")
+        logger.info(f"   Stderr length: {len(result.stderr) if result.stderr else 0} chars")
+        
+        if result.stdout:
+            logger.info(f"   Stdout (first 500 chars):\n{result.stdout[:500]}")
+        if result.stderr:
+            logger.info(f"   Stderr (first 500 chars):\n{result.stderr[:500]}")
+        
+        return result
 
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
+        logger.error(f"⏱️  TIMEOUT after {timeout}s")
+        logger.error(f"   Partial stdout: {e.stdout[:200] if e.stdout else 'None'}")
+        logger.error(f"   Partial stderr: {e.stderr[:200] if e.stderr else 'None'}")
         result          = subprocess.CompletedProcess(cmd, returncode=-1)
         result.stdout   = ""
         result.stderr   = f"Timed out after {timeout}s"
         return result
 
     except Exception as e:
+        logger.error(f"❌ EXCEPTION: {type(e).__name__}: {e}")
+        logger.error(f"   Traceback: {traceback.format_exc()}")
         result          = subprocess.CompletedProcess(cmd, returncode=-2)
         result.stdout   = ""
         result.stderr   = str(e)
