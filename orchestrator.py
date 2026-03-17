@@ -38,7 +38,7 @@ DB_PATH = project_root / "database" / "tasks.db"
 # ── Your Claude command ───────────────────────────────────────────────────────
 # This must match EXACTLY what works in your terminal.
 # Your example: ["ccr", "code", "-p", "Hi"] with shell=True
-CLAUDE_COMMAND = ["ccr", "code"]
+CLAUDE_COMMAND = ["qwen"]
 
 
 # =============================================================================
@@ -190,34 +190,142 @@ class NeedsActionMonitor(FileSystemEventHandler):
     def _run_claude(self, file_path: Path, task_id: str):
         """
         Send the file to Claude Code for processing.
-        
+
         Claude will:
         - Read the file
         - Read Company_Handbook.md and BUSINESS_GOALS.md
         - Decide what type of item this is
         - Decide if human approval is needed
-        - Write outputs to the correct vault folders
-        - Update Dashboard.md
+        - WRITE OUTPUT FILES to the vault folders
         """
-        prompt = f"""A new item needs processing: {file_path.name}
+        prompt = f"""You are an AI Employee processing a new item. Your task is to analyze this item and CREATE output files in the vault.
 
-File is located at: {file_path}
+**INPUT FILE:** {file_path.name}
+**LOCATION:** {file_path}
+**TASK ID:** {task_id}
 
-Please:
-1. Read the file carefully
-2. Read Company_Handbook.md to understand the rules
-3. Read BUSINESS_GOALS.md to understand context
-4. Decide what type of item this is and what action is needed
-5. If the item needs my approval before any action:
-   - Write a draft to Pending_Approval/ folder
-   - Set requires_approval: true in the file frontmatter
-6. If the item can be handled directly:
-   - Write your output to Plans/ or Done/ as appropriate
-7. Update the Recent Activity section of Dashboard.md
-8. Do NOT send emails, messages, or execute any real actions
-9. Only write files — I will review and approve before anything is sent
+---
 
-Task ID for reference: {task_id}"""
+## YOUR TASK (MUST DO ALL):
+
+1. **READ** the input file carefully
+2. **READ** Company_Handbook.md for rules and guidelines
+3. **READ** Business_Goals.md for context
+4. **DECIDE** what type of item this is and what action is needed
+5. **WRITE** output files to the vault (THIS IS CRITICAL - YOU MUST WRITE FILES)
+
+---
+
+## OUTPUT OPTIONS (CHOOSE ONE):
+
+### OPTION 1: Needs Approval (Most Common)
+If the item requires human approval, CREATE this file:
+
+**File:** `Pending_Approval/APPROVAL_{task_id}.md`
+
+```markdown
+---
+type: approval_request
+task_id: {task_id}
+action: [describe action needed]
+requires_approval: true
+created: [today's date]
+---
+
+# Approval Required
+
+## Summary
+[2-3 sentence summary of what needs approval]
+
+## Details
+[Specific details about the request]
+
+## Recommendation
+[Your recommendation on what to do]
+
+## To Approve
+Move this file to: /Approved/
+
+## To Reject
+Move this file to: /Rejected/
+```
+
+### OPTION 2: Can Archive Directly (Simple Items)
+If no action is needed, CREATE this file:
+
+**File:** `Done/DONE_{task_id}.md`
+
+```markdown
+---
+type: completion_summary
+task_id: {task_id}
+action_taken: archived
+completed: [today's date]
+---
+
+# Item Archived
+
+## Summary
+[Brief summary of the item]
+
+## Reason for Archiving
+[Why no action is needed]
+
+## File Reference
+Original: {file_path.name}
+```
+
+### OPTION 3: Create Action Plan (Complex Items)
+If work is needed over time, CREATE this file:
+
+**File:** `Plans/PLAN_{task_id}.md`
+
+```markdown
+---
+type: plan
+task_id: {task_id}
+objective: [what needs to be done]
+status: pending
+created: [today's date]
+---
+
+# Action Plan
+
+## Objective
+[Clear statement of what needs to be achieved]
+
+## Steps
+- [ ] Step 1: [first action]
+- [ ] Step 2: [second action]
+- [ ] Step 3: [third action]
+
+## Notes
+[Any relevant notes or context]
+```
+
+---
+
+## CRITICAL RULES:
+
+1. **YOU MUST WRITE A FILE** - Do not just respond with text
+2. **Choose ONE option** from the three above
+3. **Use the exact format** shown for your chosen option
+4. **Save the file** in the correct folder (Pending_Approval/, Done/, or Plans/)
+5. **Do NOT send emails or messages** - only write files
+6. **Update Dashboard.md** with a brief note about what you did
+
+---
+
+## EXAMPLE WORKFLOW:
+
+**IF** the file contains a simple test message → **WRITE** to Done/
+**IF** the file contains a request for action → **WRITE** to Pending_Approval/
+**IF** the file contains a complex project → **WRITE** to Plans/
+
+---
+
+**NOW PROCESS THIS ITEM AND WRITE THE APPROPRIATE OUTPUT FILE.**
+"""
 
         logger.info(f"   🤖 Sending to Claude...")
         result = invoke_claude(prompt, self.vault_path)
