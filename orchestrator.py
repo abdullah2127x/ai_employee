@@ -127,15 +127,22 @@ class NeedsActionMonitor(FileSystemEventHandler):
         # Generate a task ID from timestamp
         task_id = f"task_{int(time.time())}_{file_path.stem}"
 
-        # Record in database
-        self.db.create_task(
-            task_id    = task_id,
-            task_type  = "incoming",
-            source_file= str(file_path),
-            priority   = "normal",
-            title      = file_path.name,
-        )
-        self.db.update_task_status(task_id, "processing")
+        # Check if task already exists (FilesystemWatcher may have created it)
+        existing_task = self.db.get_task(task_id)
+        if existing_task:
+            logger.info(f"   → Task already exists, skipping creation")
+            # Just update status to processing
+            self.db.update_task_status(task_id, "processing")
+        else:
+            # Record in database
+            self.db.create_task(
+                task_id    = task_id,
+                task_type  = "incoming",
+                source_file= str(file_path),
+                priority   = "normal",
+                title      = file_path.name,
+            )
+            self.db.update_task_status(task_id, "processing")
 
         # Don't move the file - it's still being written by FilesystemWatcher
         # Just process it where it is
