@@ -166,6 +166,8 @@ class DropFolderHandler(FileSystemEventHandler):
     ) -> Path:
         """
         Create a markdown metadata file for the dropped file.
+        
+        Includes the actual file content so Claude can process it.
 
         Args:
             source: Original file path
@@ -179,6 +181,16 @@ class DropFolderHandler(FileSystemEventHandler):
         """
         timestamp_str = timestamp.strftime('%Y%m%d_%H%M%S')
         metadata_path = self.needs_action / f"FILE_{timestamp_str}_{source.name}.md"
+        
+        # Try to read file content
+        file_content = ""
+        try:
+            if vault_file and vault_file.exists():
+                file_content = vault_file.read_text(encoding='utf-8')
+            elif source.exists():
+                file_content = source.read_text(encoding='utf-8')
+        except Exception as e:
+            file_content = f"[Could not read file: {e}]"
 
         content = f"""---
 type: file_drop
@@ -212,6 +224,14 @@ status: pending
 
 ---
 
+## File Content
+
+```
+{file_content}
+```
+
+---
+
 ## Suggested Actions
 
 - [ ] Review file contents
@@ -233,7 +253,7 @@ status: pending
 
         metadata_path.write_text(content, encoding='utf-8')
         logger.debug(f"Created metadata file: {metadata_path}")
-        
+
         return metadata_path
 
     def _determine_priority(self, source: Path) -> str:
