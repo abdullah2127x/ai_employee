@@ -128,6 +128,11 @@ class Settings(BaseSettings):
         description="Enable detailed per-task log files"
     )
 
+    min_log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
+        default="INFO",
+        description="Minimum log level to log (DEBUG, INFO, WARNING, ERROR, CRITICAL)"
+    )
+
     # ========================================================================
     # Vault Paths (Computed Properties)
     # ========================================================================

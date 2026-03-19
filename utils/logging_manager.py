@@ -4,9 +4,9 @@ logging_manager.py - Centralized logging manager for AI Employee
 Complete logging system with:
 1. Timeline (daily, high-level, orchestrator only)
 2. Task logs (detailed, per-task, all components)
-3. Error logging (with stack traces)
+3. Error logs (with stack traces)
 4. Console output (optional)
-5. Log level filtering (ERROR, WARNING, INFO, DEBUG, CRITICAL)
+5. Log level filtering (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 
 Based on requirements in Logging_Requirements.md
 
@@ -40,22 +40,20 @@ class LoggingManager:
     - Thread-safe file operations
     
     Configuration:
-        All paths from core.config.settings:
-        - logs_dir: settings.logs_dir (vault_path / "Logs")
-        - enable_console: settings.dev_mode (disabled in production)
-        
-        Log level passed as parameter:
-        - log_level: Passed to constructor (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-                   Allows different components to use different log levels
+        All settings from core.config.settings:
+        - logs_dir: Directory for log files (vault_path / "Logs")
+        - enable_console: True in dev mode, False in production  
+        - min_log_level: Minimum message level to log (from .env)
     """
 
-    def __init__(self, log_level: str = "WARNING"):
+    def __init__(self):
         """
         Initialize logging manager.
         
-        Args:
-            log_level: Minimum log level for filtering (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-                      Defaults to WARNING for balanced logging
+        All configuration is automatically obtained from core.config.settings:
+        - logs_dir: Directory for log files
+        - enable_console: True in dev mode, False in production
+        - min_log_level: Minimum message level to log (from settings.min_log_level)
         """
         # Use centralized settings for paths and console output
         self.logs_dir = settings.logs_dir
@@ -64,27 +62,39 @@ class LoggingManager:
         self.errors_dir = self.logs_dir / "errors"
 
         # Create directories
-        settings.ensure_vault_directories()  # This creates logs_dir too
+        settings.ensure_vault_directories()  # This creates logs_dir
+        self.timeline_dir.mkdir(parents=True, exist_ok=True)
+        self.tasks_dir.mkdir(parents=True, exist_ok=True)
+        self.errors_dir.mkdir(parents=True, exist_ok=True)
 
         # Console output - disabled in production mode
         self.enable_console = settings.dev_mode
         
-        # Log level filtering - passed as parameter (not from settings)
-        # This allows different components to use different log levels
-        self.log_levels = {
+        # Log level filtering - obtained from settings (centralized in .env)
+        self.log_level_values = {
             "DEBUG": 0,
             "INFO": 1,
             "WARNING": 2,
             "ERROR": 3,
             "CRITICAL": 4
         }
-        self.min_log_level = self.log_levels.get(log_level.upper(), 2)
+        self.min_log_level_value = self.log_level_values.get(settings.min_log_level.upper(), 2)
 
-    def _should_log(self, level: str) -> bool:
-        """Check if message should be logged based on level"""
-        return self.log_levels.get(level.upper(), 1) >= self.min_log_level
+    def _should_log(self, message_level: str) -> bool:
+        """
+        Check if message should be logged based on its level.
+        
+        Args:
+            message_level: The level of this specific message (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        
+        Returns:
+            True if message_level >= min_log_level_value (message should be logged)
+            False if message_level < min_log_level_value (message filtered out)
+        """
+        message_level_value = self.log_level_values.get(message_level.upper(), 1)
+        return message_level_value >= self.min_log_level_value
 
-    def _print_to_console(self, level: str, message: str, actor: str = ""):
+    def _print_to_console(self, message_level: str, message: str, actor: str = ""):
         """Print to console if enabled"""
         if not self.enable_console:
             return
@@ -97,7 +107,7 @@ class LoggingManager:
             "ERROR": "❌",
             "CRITICAL": "🔥"
         }
-        symbol = level_symbol.get(level.upper(), "•")
+        symbol = level_symbol.get(message_level.upper(), "•")
 
         if actor:
             print(f"{timestamp} [{actor}] {symbol} {message}")
@@ -138,7 +148,7 @@ class LoggingManager:
         self,
         message: str,
         actor: str = "orchestrator",
-        level: str = "INFO"
+        message_level: str = "INFO"
     ):
         """
         Append to daily timeline (orchestrator only).
@@ -148,9 +158,9 @@ class LoggingManager:
         Args:
             message: Log message (can include emojis)
             actor: Component name (default: "orchestrator")
-            level: Log level (INFO, WARNING, ERROR, etc.)
+            message_level: Level of this message (INFO, WARNING, ERROR, etc.)
         """
-        if not self._should_log(level):
+        if not self._should_log(message_level):
             return
 
         timeline_path = self.get_timeline_path()
@@ -169,11 +179,11 @@ class LoggingManager:
             "ERROR": "❌ ERROR: ",
             "CRITICAL": "🔥 CRITICAL: "
         }
-        prefix = level_prefix.get(level.upper(), "")
+        prefix = level_prefix.get(message_level.upper(), "")
         log_line = f"{timestamp} [{actor}] → {prefix}{message}\n"
 
         self._safe_append(timeline_path, log_line)
-        self._print_to_console(level, message, actor)
+        self._print_to_console(message_level, message, actor)
 
     # ========================================================================
     # Task Logging (All Components)
@@ -187,7 +197,7 @@ class LoggingManager:
         actor: str,
         trigger_file: Optional[str] = None,
         status: str = "in_progress",
-        level: str = "INFO"
+        message_level: str = "INFO"
     ):
         """
         Append to per-task detailed log.
@@ -201,9 +211,9 @@ class LoggingManager:
             actor: Component name (filesystem_watcher, orchestrator, etc.)
             trigger_file: Path to file that triggered this task
             status: Task status (in_progress, completed, failed, skipped)
-            level: Log level (INFO, WARNING, ERROR, etc.)
+            message_level: Level of this message (INFO, WARNING, ERROR, etc.)
         """
-        if not self._should_log(level):
+        if not self._should_log(message_level):
             return
 
         task_log_path = self.get_task_log_path(task_type, task_id)
@@ -233,11 +243,11 @@ duration_sec:    0
             "ERROR": "❌ ERROR: ",
             "CRITICAL": "🔥 CRITICAL: "
         }
-        prefix = level_prefix.get(level.upper(), "")
+        prefix = level_prefix.get(message_level.upper(), "")
         log_line = f"{timestamp} [{actor}] {prefix}{message}\n"
 
         self._safe_append(task_log_path, log_line)
-        self._print_to_console(level, message, actor)
+        self._print_to_console(message_level, message, actor)
 
     def update_task_status(
         self,
@@ -302,7 +312,7 @@ duration_sec:    0
         if error:
             error_message += f" - {type(error).__name__}: {str(error)}"
 
-        self.write_to_timeline(error_message, actor=actor, level="ERROR")
+        self.write_to_timeline(error_message, actor=actor, message_level="ERROR")
 
         # Log stack trace to error file if exception provided
         if error and log_stack_trace:
@@ -359,7 +369,7 @@ duration_sec:    0
         if not self._should_log("WARNING"):
             return
 
-        self.write_to_timeline(message, actor=actor, level="WARNING")
+        self.write_to_timeline(message, actor=actor, message_level="WARNING")
         self._print_to_console("WARNING", message, actor)
 
     def log_critical(
@@ -383,7 +393,7 @@ duration_sec:    0
         if error:
             error_message += f" - {type(error).__name__}: {str(error)}"
 
-        self.write_to_timeline(error_message, actor=actor, level="CRITICAL")
+        self.write_to_timeline(error_message, actor=actor, message_level="CRITICAL")
 
         # Always log stack trace for critical errors
         if error:
@@ -406,7 +416,7 @@ duration_sec:    0
         if not self._should_log("DEBUG"):
             return
 
-        self.write_to_timeline(f"[DEBUG] {message}", actor=actor, level="DEBUG")
+        self.write_to_timeline(f"[DEBUG] {message}", actor=actor, message_level="DEBUG")
         self._print_to_console("DEBUG", message, actor)
 
     # ========================================================================
@@ -462,6 +472,9 @@ duration_sec:    0
         Returns:
             Summary string
         """
+        # Find the level name from the value
+        level_name = [name for name, value in self.log_level_values.items() if value == self.min_log_level_value][0]
+        
         return f"""
 Logging Configuration:
   Logs Directory: {self.logs_dir}
@@ -469,7 +482,7 @@ Logging Configuration:
   Tasks: {self.tasks_dir}
   Errors: {self.errors_dir}
   Console Output: {'Enabled' if self.enable_console else 'Disabled'}
-  Minimum Log Level: {list(self.log_levels.keys())[list(self.log_levels.values()).index(self.min_log_level)]}
+  Minimum Log Level: {level_name} (messages at or above this level are logged)
   Mode: {'Development' if self.enable_console else 'Production'}
 """.strip()
 
@@ -478,15 +491,13 @@ Logging Configuration:
 # Convenience Functions
 # ============================================================================
 
-def get_logger(log_level: str = "WARNING") -> LoggingManager:
+def get_logger() -> LoggingManager:
     """
     Get a LoggingManager instance.
     
-    Args:
-        log_level: Minimum log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-                  Defaults to WARNING for balanced logging
+    All configuration is obtained from core.config.settings.
     
     Returns:
         LoggingManager instance
     """
-    return LoggingManager(log_level=log_level)
+    return LoggingManager()

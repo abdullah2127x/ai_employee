@@ -12,11 +12,14 @@ Key Features:
 - Handles server restarts gracefully
 - No database dependency - uses file-based tracking only
 - Integrated with two-tier logging system (timeline + task logs)
+
+Logging:
+- Uses LoggingManager for ALL logging (console + files)
+- Log level controls verbosity (INFO for dev, WARNING for production)
 """
 
 import hashlib
 import shutil
-import logging
 import time
 import json
 import re
@@ -29,7 +32,15 @@ from watchdog.events import FileSystemEventHandler, FileCreatedEvent
 from utils.logging_manager import LoggingManager
 from core.config import settings
 
-logger = logging.getLogger(__name__)
+# Use LoggingManager for ALL logging (no Python logging module)
+# Log level is obtained from settings.min_log_level (configured in .env)
+logger = LoggingManager()  # No parameters needed!
+
+# Ensure log directories exist before any logging happens
+logger.logs_dir.mkdir(parents=True, exist_ok=True)
+logger.timeline_dir.mkdir(parents=True, exist_ok=True)
+logger.tasks_dir.mkdir(parents=True, exist_ok=True)
+logger.errors_dir.mkdir(parents=True, exist_ok=True)
 
 
 class DropFolderHandler(FileSystemEventHandler):
@@ -71,20 +82,20 @@ class DropFolderHandler(FileSystemEventHandler):
         # Load hash registry into memory
         self.hash_registry: Dict[str, Dict[str, Any]] = self._load_hash_registry()
 
-        # Initialize logging manager (uses settings for paths, log level as parameter)
-        self.logger = LoggingManager(log_level="WARNING")
+        # Initialize logging manager (uses settings for paths and min_log_level)
+        self.logger = LoggingManager()  # No parameters - reads from settings!
         self.logs_per_task_enabled = settings.logs_per_task_enabled
 
-        logger.info(f"DropFolderHandler initialized")
-        logger.info(f"  Vault: {self.vault_path}")
-        logger.info(f"  Watch: {self.watch_folder}")
-        logger.info(f"  History: {self.drop_history}")
-        logger.info(f"  Hash Registry: {self.hash_registry_file}")
+        logger.write_to_timeline("DropFolderHandler initialized", actor="filesystem_watcher", level="INFO")
+        logger.write_to_timeline(f"Vault: {self.vault_path}", actor="filesystem_watcher", level="INFO")
+        logger.write_to_timeline(f"Watch: {self.watch_folder}", actor="filesystem_watcher", level="INFO")
+        logger.write_to_timeline(f"History: {self.drop_history}", actor="filesystem_watcher", level="INFO")
+        logger.write_to_timeline(f"Hash Registry: {self.hash_registry_file}", actor="filesystem_watcher", level="INFO")
     
     def _load_hash_registry(self) -> Dict[str, Dict[str, Any]]:
         """
         Load hash registry from JSON file.
-        
+
         Returns:
             Dictionary: {filename: {"hashes": [hash1, hash2, ...], "last_processed": timestamp}}
         """
@@ -93,7 +104,7 @@ class DropFolderHandler(FileSystemEventHandler):
                 with open(self.hash_registry_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
             except Exception as e:
-                logger.warning(f"Could not load hash registry: {e}")
+                logger.log_warning(f"Could not load hash registry", actor="filesystem_watcher")
                 return {}
         return {}
     
@@ -109,9 +120,9 @@ class DropFolderHandler(FileSystemEventHandler):
                 self.hash_registry_file.unlink()
             
             temp_path.rename(self.hash_registry_file)
-            logger.debug("Hash registry saved")
+            logger.write_to_timeline("Hash registry saved", actor="filesystem_watcher", level="DEBUG")
         except Exception as e:
-            logger.error(f"Failed to save hash registry: {e}")
+            logger.log_error(f"Failed to save hash registry", error=e, actor="filesystem_watcher")
             if temp_path.exists():
                 temp_path.unlink()
     
@@ -153,16 +164,16 @@ class DropFolderHandler(FileSystemEventHandler):
     def on_created(self, event):
         """Called when a new file is created in the watched directory."""
         if event.is_directory:
-            logger.debug(f"Ignoring directory creation: {event.src_path}")
+            logger.write_to_timeline(f"Ignoring directory creation: {event.src_path}", actor="filesystem_watcher", level="DEBUG")
             return
 
         # Ignore .gitkeep and hidden files
         src_path = Path(event.src_path)
         if src_path.name.startswith(".") or src_path.suffix == ".gitkeep":
-            logger.debug(f"Ignoring system file: {src_path.name}")
+            logger.write_to_timeline(f"Ignoring system file: {src_path.name}", actor="filesystem_watcher", level="DEBUG")
             return
 
-        logger.info(f"📁 New file detected: {src_path.name}")
+        logger.write_to_timeline(f"📁 New file detected: {src_path.name}", actor="filesystem_watcher", level="INFO")
 
         # Log to task log if enabled
         if self.logs_per_task_enabled:
@@ -171,7 +182,8 @@ class DropFolderHandler(FileSystemEventHandler):
                 task_id=f"file_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{src_path.name}",
                 message=f"📁 New file detected: {src_path.name}",
                 actor="filesystem_watcher",
-                trigger_file=str(src_path)
+                trigger_file=str(src_path),
+                level="INFO"
             )
 
         try:
@@ -180,14 +192,14 @@ class DropFolderHandler(FileSystemEventHandler):
 
             # Verify file still exists
             if not src_path.exists():
-                logger.warning(f"File disappeared before processing: {src_path.name}")
+                logger.write_to_timeline(f"File disappeared before processing: {src_path.name}", actor="filesystem_watcher", level="WARNING")
                 return
 
             # Calculate file hash (for content-based deduplication)
             try:
                 file_hash = self._calculate_file_hash(src_path)
             except Exception as e:
-                logger.error(f"Could not calculate hash for {src_path.name}: {e}")
+                logger.log_error(f"Could not calculate hash for {src_path.name}", error=e, actor="filesystem_watcher")
                 return
 
             # DEDUPLICATION 1: Check 2-second window (same filename + same hash)
@@ -196,24 +208,25 @@ class DropFolderHandler(FileSystemEventHandler):
                 last_hash, last_time = self.recently_processed[src_path.name]
                 if current_time - last_time < 2.0:
                     if file_hash == last_hash:
-                        logger.debug(f"Skipping duplicate event (2-sec window): {src_path.name}")
+                        logger.write_to_timeline(f"Skipping duplicate event (2-sec window): {src_path.name}", actor="filesystem_watcher", level="DEBUG")
                         return
                     else:
-                        logger.info(f"Same filename, different content: {src_path.name} (processing new version)")
+                        logger.write_to_timeline(f"Same filename, different content: {src_path.name} (processing new version)", actor="filesystem_watcher", level="INFO")
 
             # DEDUPLICATION 2: Check if same content already processed
             if self._is_already_processed(src_path.name, file_hash):
-                logger.info(f"⏭️  Skipping duplicate (already in history): {src_path.name}")
+                logger.write_to_timeline(f"⏭️ Skipping duplicate (already in history): {src_path.name}", actor="filesystem_watcher", level="INFO")
                 
                 # Log duplicate detection
                 if self.logs_per_task_enabled:
                     self.logger.write_to_task_log(
                         task_type="file_drop",
                         task_id=f"file_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{src_path.name}",
-                        message=f"⏭️  Skipped duplicate (already in history)",
+                        message=f"⏭️ Skipped duplicate (already in history)",
                         actor="filesystem_watcher",
                         trigger_file=str(src_path),
-                        status="skipped"
+                        status="skipped",
+                        level="INFO"
                     )
                 
                 # Move to Drop_History (don't delete - preserve for user reference)
@@ -229,13 +242,13 @@ class DropFolderHandler(FileSystemEventHandler):
                         history_path = self.drop_history / history_name
                     
                     shutil.move(str(src_path), str(history_path))
-                    logger.info(f"📁 Moved duplicate to history: {history_path.name}")
+                    logger.write_to_timeline(f"📁 Moved duplicate to history: {history_path.name}", actor="filesystem_watcher", level="INFO")
                 except Exception as e:
-                    logger.warning(f"Could not move duplicate {src_path.name} to history: {e}")
+                    logger.log_warning(f"Could not move duplicate {src_path.name} to history", actor="filesystem_watcher")
                     # Fallback: just delete if move fails
                     try:
                         src_path.unlink()
-                        logger.info(f"🗑️  Removed duplicate from Drop: {src_path.name}")
+                        logger.write_to_timeline(f"🗑️ Removed duplicate from Drop: {src_path.name}", actor="filesystem_watcher", level="INFO")
                     except:
                         pass
                 
@@ -248,7 +261,7 @@ class DropFolderHandler(FileSystemEventHandler):
             self._process_new_file(src_path, file_hash)
 
         except Exception as e:
-            logger.error(f"Error processing file {src_path.name}: {e}", exc_info=True)
+            logger.log_error(f"Error processing file {src_path.name}", error=e, actor="filesystem_watcher")
             # File stays in Drop/ for retry on next scan
 
     def _calculate_file_hash(self, file_path: Path) -> str:
@@ -292,7 +305,7 @@ class DropFolderHandler(FileSystemEventHandler):
                     if file_hash == existing_hash:
                         return True
                 except Exception as e:
-                    logger.debug(f"Could not hash {existing.name}: {e}")
+                    logger.write_to_timeline(f"Could not hash {existing.name}", actor="filesystem_watcher", level="DEBUG")
 
         return False
 
@@ -318,7 +331,7 @@ class DropFolderHandler(FileSystemEventHandler):
             file_size = source.stat().st_size
             file_modified = datetime.fromtimestamp(source.stat().st_mtime)
         except Exception as e:
-            logger.warning(f"Could not get file metadata: {e}")
+            logger.log_warning(f"Could not get file metadata", actor="filesystem_watcher")
             file_size = 0
             file_modified = timestamp
 
@@ -333,7 +346,7 @@ class DropFolderHandler(FileSystemEventHandler):
             file_content = source.read_text(encoding="utf-8")
         except Exception as e:
             content_read_error = f"[Could not read file: {e}]"
-            logger.warning(f"Could not read content of {source.name}: {e}")
+            logger.log_warning(f"Could not read content of {source.name}", actor="filesystem_watcher")
 
         # Prepare FULL metadata content in memory
         metadata_content = self._prepare_metadata_content(
@@ -353,7 +366,7 @@ class DropFolderHandler(FileSystemEventHandler):
         try:
             temp_path.write_text(metadata_content, encoding="utf-8")
             temp_path.rename(metadata_path)  # Atomic rename
-            logger.info(f"📝 Created metadata: {metadata_path.name}")
+            logger.write_to_timeline(f"📝 Created metadata: {metadata_path.name}", actor="filesystem_watcher", level="INFO")
             
             # Log metadata creation
             if self.logs_per_task_enabled:
@@ -361,10 +374,11 @@ class DropFolderHandler(FileSystemEventHandler):
                     task_type="file_drop",
                     task_id=task_id,
                     message=f"📝 Created metadata: {metadata_path.name}",
-                    actor="filesystem_watcher"
+                    actor="filesystem_watcher",
+                    level="INFO"
                 )
         except Exception as e:
-            logger.error(f"Failed to write metadata for {source.name}: {e}")
+            logger.log_error(f"Failed to write metadata for {source.name}", error=e, actor="filesystem_watcher")
             # Clean up temp file if it exists
             if temp_path.exists():
                 temp_path.unlink()
@@ -376,7 +390,7 @@ class DropFolderHandler(FileSystemEventHandler):
 
         try:
             shutil.move(str(source), str(history_path))
-            logger.info(f"📁 Moved to history: {source.name}")
+            logger.write_to_timeline(f"📁 Moved to history: {source.name}", actor="filesystem_watcher", level="INFO")
             
             # Log file move
             if self.logs_per_task_enabled:
@@ -384,7 +398,8 @@ class DropFolderHandler(FileSystemEventHandler):
                     task_type="file_drop",
                     task_id=task_id,
                     message=f"📁 Moved to history: {source.name}",
-                    actor="filesystem_watcher"
+                    actor="filesystem_watcher",
+                    level="INFO"
                 )
         except FileExistsError:
             # File with same name already exists in history
@@ -393,19 +408,19 @@ class DropFolderHandler(FileSystemEventHandler):
             history_name = f"{timestamp_for_name}_{source.name}"
             history_path = self.drop_history / history_name
             shutil.move(str(source), str(history_path))
-            logger.info(f"📁 Moved to history (renamed): {history_name}")
+            logger.write_to_timeline(f"📁 Moved to history (renamed): {history_name}", actor="filesystem_watcher", level="INFO")
         except Exception as e:
-            logger.error(f"Failed to move {source.name} to history: {e}")
+            logger.log_error(f"Failed to move {source.name} to history", error=e, actor="filesystem_watcher")
             # File stays in Drop/, will be detected as duplicate on next scan
 
         # Add hash to registry (AFTER successful move)
         self._add_to_hash_registry(source.name, file_hash, timestamp)
 
-        logger.info(f"✅ Successfully processed: {source.name}")
-        logger.info(f"   Task ID: {task_id}")
-        logger.info(f"   Hash: {file_hash}")
-        logger.info(f"   Metadata: {metadata_path.name}")
-        logger.info(f"   History: {history_path.name}")
+        logger.write_to_timeline(f"✅ Successfully processed: {source.name}", actor="filesystem_watcher", level="INFO")
+        logger.write_to_timeline(f"Task ID: {task_id}", actor="filesystem_watcher", level="INFO")
+        logger.write_to_timeline(f"Hash: {file_hash}", actor="filesystem_watcher", level="INFO")
+        logger.write_to_timeline(f"Metadata: {metadata_path.name}", actor="filesystem_watcher", level="INFO")
+        logger.write_to_timeline(f"History: {history_path.name}", actor="filesystem_watcher", level="INFO")
         
         # Log task completion
         if self.logs_per_task_enabled:
@@ -573,64 +588,70 @@ class FilesystemWatcher:
         self.handler = DropFolderHandler()
         self.observer = Observer()
 
-        logger.info(f"FilesystemWatcher initialized")
-        logger.info(f"  Watching: {self.watch_folder}")
+        logger.write_to_timeline("FilesystemWatcher initialized", actor="filesystem_watcher", level="INFO")
+        logger.write_to_timeline(f"Watching: {self.watch_folder}", actor="filesystem_watcher", level="INFO")
 
     def scan_existing_files(self):
         """
         Scan and process any existing files in the watch folder.
         Called on startup to handle files that arrived while server was down.
-        
+
         Skips:
         - .gitkeep files
         - Hidden files (starting with .)
         - Directories
         """
         files = list(self.watch_folder.iterdir())
-        
+
         # Filter out system files and directories
         files_to_process = []
         for file in files:
             if file.is_file() and not file.name.startswith(".") and file.suffix != ".gitkeep":
                 files_to_process.append(file)
-        
+
         if files_to_process:
-            logger.info(f"🔍 Scanning {len(files_to_process)} existing file(s) in watch folder")
+            msg = f"🔍 Scanning {len(files_to_process)} existing file(s) in watch folder: {[f.name for f in files_to_process]}"
+            logger.write_to_timeline(msg, actor="filesystem_watcher", level="INFO")
+            print(msg, flush=True)  # Force immediate output
         else:
-            logger.debug("No existing files to scan")
+            logger.write_to_timeline("No existing files to scan", actor="filesystem_watcher", level="DEBUG")
+            print("No files to scan", flush=True)
 
         for file in files_to_process:
             try:
                 # Calculate hash first (same as on_created does)
                 file_hash = self.handler._calculate_file_hash(file)
+                logger.write_to_timeline(f"Processing: {file.name}", actor="filesystem_watcher", level="INFO")
                 self.handler._process_new_file(file, file_hash)
+                print(f"✅ Processed: {file.name}", flush=True)
             except Exception as e:
-                logger.error(f"Error processing existing file {file.name}: {e}")
+                logger.log_error(f"Error processing existing file {file.name}", error=e, actor="filesystem_watcher")
+                print(f"❌ Error processing {file.name}: {e}", flush=True)
 
     def start(self):
         """Start watching the folder."""
         self.scan_existing_files()
         self.observer.schedule(self.handler, str(self.watch_folder), recursive=False)
         self.observer.start()
-        logger.info("✅ Filesystem watcher started")
-        logger.info(f"   Monitoring: {self.watch_folder}")
+        logger.write_to_timeline("✅ Filesystem watcher started", actor="filesystem_watcher", level="INFO")
+        logger.write_to_timeline(f"Monitoring: {self.watch_folder}", actor="filesystem_watcher", level="INFO")
 
     def stop(self):
         """Stop watching the folder."""
         self.observer.stop()
         self.observer.join()
-        logger.info("⏹️  Filesystem watcher stopped")
+        logger.write_to_timeline("⏹️ Filesystem watcher stopped", actor="filesystem_watcher", level="INFO")
 
     def run(self):
         """Run the watcher (blocks until interrupted)."""
         self.start()
-        logger.info("👁️  Watching for files... (Press Ctrl+C to stop)")
+        logger.write_to_timeline("👁️ Watching for files... (Press Ctrl+C to stop)", actor="filesystem_watcher", level="INFO")
 
         try:
             while True:
                 time.sleep(1)
         except KeyboardInterrupt:
-            logger.info("Received interrupt signal")
+            logger.write_to_timeline("Received interrupt signal", actor="filesystem_watcher", level="INFO")
             self.stop()
 
     def __enter__(self):
