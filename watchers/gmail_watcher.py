@@ -18,7 +18,7 @@ try:
     GMAIL_AVAILABLE = True
 except ImportError:
     GMAIL_AVAILABLE = False
-    logging.warning("Gmail API libraries not installed. Install with: pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client")
+    logging.warning("Gmail API libraries not installed. Install with: uv add google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client")
 
 
 class GmailWatcher(BaseWatcher):

@@ -24,42 +24,42 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 # ── Project setup ────────────────────────────────────────────────────────────
-project_root = Path(__file__).parent
+project_root = Path(__file__).parent.resolve()
 sys.path.insert(0, str(project_root))
 
-from database import TaskDatabase
-from logging_utils import setup_logging
 from core.config import settings
+from utils.logging_manager import LoggingManager
 
-logger = setup_logging(settings.log_dir)
-
-DB_PATH = project_root / "database" / "tasks.db"
+logger = LoggingManager()
 
 # ── Your Claude command ───────────────────────────────────────────────────────
 # This must match EXACTLY what works in your terminal.
 # Your example: ["ccr", "code", "-p", "Hi"] with shell=True
-CLAUDE_COMMAND = ["qwen"]
+CLAUDE_COMMAND = ["ccr", "code"]  # Base command - we'll add prompt and cwd in the function
 
 
 # =============================================================================
 # Claude Invocation — Matches Your Example Exactly
 # =============================================================================
 
+
 def invoke_claude(prompt: str, vault_path: Path, timeout: int = 300) -> subprocess.CompletedProcess:
     """
     Run Claude Code with a prompt.
-    
-    Matches the format from example_subprocess_claude.py exactly.
+
+    Fixed: Use shell=True with .cmd path for Windows.
     """
-    # Build command list - exactly like your example
-    cmd = CLAUDE_COMMAND + ["-p", prompt, "--cwd", str(vault_path)]
-    
+    # Build command string for Windows - must use shell=True for .cmd files
+    # Escape double quotes in prompt by replacing " with \"
+    escaped_prompt = prompt.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '')
+    cmd = f'ccr code -p "{escaped_prompt}"'
+    env = os.environ.copy()
+
     # LOG EVERYTHING for debugging
     logger.info("=" * 80)
     logger.info("🔵 CLAUDE INVOCATION DETAILS")
     logger.info("=" * 80)
-    logger.info(f"Command list: {cmd}")
-    logger.info(f"Command as string: {' '.join(cmd)}")
+    logger.info(f"Command: {cmd}")
     logger.info(f"Vault path: {vault_path}")
     logger.info(f"Timeout: {timeout}s")
     logger.info(f"Prompt (first 200 chars): {prompt[:200]}...")
@@ -67,36 +67,39 @@ def invoke_claude(prompt: str, vault_path: Path, timeout: int = 300) -> subproce
 
     try:
         logger.info("🔄 Running subprocess.run()...")
-        logger.info(f"   shell={True}")
+        logger.info(f"   shell=True (required for .cmd on Windows)")
         logger.info(f"   capture_output={True}")
         logger.info(f"   text={True}")
-        
-        # Exactly like your example: shell=True, capture_output, text, timeout
+        logger.info(f"   cwd={vault_path}")
+
+        # Fixed: Use shell=True with properly escaped command string
         result = subprocess.run(
             cmd,
-            shell=True,           # Required on Windows for .cmd wrappers
+            shell=True,  # Required for .cmd files on Windows
             capture_output=True,  # Capture stdout and stderr
-            text=True,            # Return strings, not bytes
-            timeout=timeout,      # Give up after timeout seconds
+            text=True,  # Return strings, not bytes
+            timeout=timeout,  # Give up after timeout seconds
+            cwd=str(vault_path),  # Set working directory for Claude
+            env=env,  # Pass environment variables
         )
-        
+
         logger.info("✅ subprocess.run() completed")
         logger.info(f"   Return code: {result.returncode}")
         logger.info(f"   Stdout length: {len(result.stdout) if result.stdout else 0} chars")
         logger.info(f"   Stderr length: {len(result.stderr) if result.stderr else 0} chars")
-        
+
         if result.stdout:
             logger.info(f"   Stdout (first 500 chars):\n{result.stdout[:500]}")
         if result.stderr:
             logger.info(f"   Stderr (first 500 chars):\n{result.stderr[:500]}")
-        
+
         return result
 
     except subprocess.TimeoutExpired as e:
         logger.error(f"⏱️  TIMEOUT after {timeout}s")
         logger.error(f"   Partial stdout: {e.stdout[:200] if e.stdout else 'None'}")
         logger.error(f"   Partial stderr: {e.stderr[:200] if e.stderr else 'None'}")
-        result          = subprocess.CompletedProcess(cmd, returncode=-1)
+        result          = subprocess.CompletedProcess(cmd.split(), returncode=-1)
         result.stdout   = ""
         result.stderr   = f"Timed out after {timeout}s"
         return result
@@ -104,7 +107,7 @@ def invoke_claude(prompt: str, vault_path: Path, timeout: int = 300) -> subproce
     except Exception as e:
         logger.error(f"❌ EXCEPTION: {type(e).__name__}: {e}")
         logger.error(f"   Traceback: {traceback.format_exc()}")
-        result          = subprocess.CompletedProcess(cmd, returncode=-2)
+        result          = subprocess.CompletedProcess(cmd.split(), returncode=-2)
         result.stdout   = ""
         result.stderr   = str(e)
         return result
@@ -114,6 +117,7 @@ def invoke_claude(prompt: str, vault_path: Path, timeout: int = 300) -> subproce
 # NeedsActionMonitor
 # =============================================================================
 
+
 class NeedsActionMonitor(FileSystemEventHandler):
     """
     Watches Needs_Action/ for new .md files.
@@ -122,10 +126,10 @@ class NeedsActionMonitor(FileSystemEventHandler):
     """
 
     def __init__(self, db: TaskDatabase, vault_path: Path):
-        self.db               = db
-        self.vault_path       = vault_path
-        self.needs_action     = vault_path / "Needs_Action"
-        self.processing       = vault_path / "Processing"
+        self.db = db
+        self.vault_path = vault_path
+        self.needs_action = vault_path / "Needs_Action"
+        self.processing = vault_path / "Processing"
         self.processing_files = set()
 
     def on_created(self, event):
@@ -144,7 +148,7 @@ class NeedsActionMonitor(FileSystemEventHandler):
 
         self.processing_files.add(src_path.name)
         try:
-            time.sleep(0.5)   # wait for file write to complete
+            time.sleep(0.5)  # wait for file write to complete
             if src_path.exists():
                 self._handle(src_path)
         except Exception as e:
@@ -160,10 +164,10 @@ class NeedsActionMonitor(FileSystemEventHandler):
         # Extract that ID from the filename
         timestamp_part = file_path.stem.replace("FILE_", "").replace("_", ":", 1).replace("_", " ")
         task_id = f"file_{timestamp_part.replace(' ', '_').replace(':', '_')}"
-        
+
         # Try to get existing task (created by FilesystemWatcher)
         existing_task = self.db.get_task(task_id)
-        
+
         if existing_task:
             logger.info(f"   → Found existing task: {task_id}")
             self.db.update_task_status(task_id, "processing")
@@ -172,11 +176,11 @@ class NeedsActionMonitor(FileSystemEventHandler):
             logger.info(f"   → Creating new task (FilesystemWatcher didn't)")
             task_id = f"task_{int(time.time())}_{file_path.stem}"
             self.db.create_task(
-                task_id    = task_id,
-                task_type  = "incoming",
-                source_file= str(file_path),
-                priority   = "normal",
-                title      = file_path.name,
+                task_id=task_id,
+                task_type="incoming",
+                source_file=str(file_path),
+                priority="normal",
+                title=file_path.name,
             )
             self.db.update_task_status(task_id, "processing")
 
@@ -198,134 +202,43 @@ class NeedsActionMonitor(FileSystemEventHandler):
         - Decide if human approval is needed
         - WRITE OUTPUT FILES to the vault folders
         """
-        prompt = f"""You are an AI Employee processing a new item. Your task is to analyze this item and CREATE output files in the vault.
+        original_filename = file_path.name
 
-**INPUT FILE:** {file_path.name}
-**LOCATION:** {file_path}
-**TASK ID:** {task_id}
+        content_preview = ""
+        if file_path.suffix == ".md":
+            try:
+                content = file_path.read_text(encoding="utf-8")
+                content_preview = content[:300] + ("..." if len(content) > 300 else "")
+            except:
+                content_preview = "Content could not be read"
+        prompt = f"""
+            You are my autonomous Personal AI Employee processing task: {task_id}
 
----
+            File to handle right now: {file_path}
+            Original dropped filename: {original_filename}   # <-- orchestrator will pass this
+            Content preview: {content_preview}               # <-- first 300 chars (orchestrator adds this)
 
-## YOUR TASK (MUST DO ALL):
+            === CLAUDE.md RULES ARE ACTIVE (read them first) ===
 
-1. **READ** the input file carefully
-2. **READ** Company_Handbook.md for rules and guidelines
-3. **READ** Business_Goals.md for context
-4. **DECIDE** what type of item this is and what action is needed
-5. **WRITE** output files to the vault (THIS IS CRITICAL - YOU MUST WRITE FILES)
+            Step-by-step thinking (do this in your mind first):
 
----
+            1. Read the full file content + Company_Handbook.md + Business_Goals.md + Dashboard.md
 
-## OUTPUT OPTIONS (CHOOSE ONE):
+            2. Detect type:
+            - If filename or content contains "test" → THIS IS A TEST FILE
+                → Quick path: create short DONE file, move original to Done/, update Dashboard, finish.
+            - Otherwise → full production reasoning (reply, invoice, payment, social post, etc.)
 
-### OPTION 1: Needs Approval (Most Common)
-If the item requires human approval, CREATE this file:
+            3. ALWAYS execute real file operations using filesystem tools or the inbox-conductor skill.
+            Never say "I would create..." — actually create/move files right now.
 
-**File:** `Pending_Approval/APPROVAL_{task_id}.md`
+            4. Follow exact folder & naming rules from CLAUDE.md
 
-```markdown
----
-type: approval_request
-task_id: {task_id}
-action: [describe action needed]
-requires_approval: true
-created: [today's date]
----
+            5. After everything is done, output exactly:
+            <COMPLETED_TASK_{task_id}>
 
-# Approval Required
-
-## Summary
-[2-3 sentence summary of what needs approval]
-
-## Details
-[Specific details about the request]
-
-## Recommendation
-[Your recommendation on what to do]
-
-## To Approve
-Move this file to: /Approved/
-
-## To Reject
-Move this file to: /Rejected/
-```
-
-### OPTION 2: Can Archive Directly (Simple Items)
-If no action is needed, CREATE this file:
-
-**File:** `Done/DONE_{task_id}.md`
-
-```markdown
----
-type: completion_summary
-task_id: {task_id}
-action_taken: archived
-completed: [today's date]
----
-
-# Item Archived
-
-## Summary
-[Brief summary of the item]
-
-## Reason for Archiving
-[Why no action is needed]
-
-## File Reference
-Original: {file_path.name}
-```
-
-### OPTION 3: Create Action Plan (Complex Items)
-If work is needed over time, CREATE this file:
-
-**File:** `Plans/PLAN_{task_id}.md`
-
-```markdown
----
-type: plan
-task_id: {task_id}
-objective: [what needs to be done]
-status: pending
-created: [today's date]
----
-
-# Action Plan
-
-## Objective
-[Clear statement of what needs to be achieved]
-
-## Steps
-- [ ] Step 1: [first action]
-- [ ] Step 2: [second action]
-- [ ] Step 3: [third action]
-
-## Notes
-[Any relevant notes or context]
-```
-
----
-
-## CRITICAL RULES:
-
-1. **YOU MUST WRITE A FILE** - Do not just respond with text
-2. **Choose ONE option** from the three above
-3. **Use the exact format** shown for your chosen option
-4. **Save the file** in the correct folder (Pending_Approval/, Done/, or Plans/)
-5. **Do NOT send emails or messages** - only write files
-6. **Update Dashboard.md** with a brief note about what you did
-
----
-
-## EXAMPLE WORKFLOW:
-
-**IF** the file contains a simple test message → **WRITE** to Done/
-**IF** the file contains a request for action → **WRITE** to Pending_Approval/
-**IF** the file contains a complex project → **WRITE** to Plans/
-
----
-
-**NOW PROCESS THIS ITEM AND WRITE THE APPROPRIATE OUTPUT FILE.**
-"""
+            Begin processing now.
+            """
 
         logger.info(f"   🤖 Sending to Claude...")
         result = invoke_claude(prompt, self.vault_path)
@@ -338,18 +251,17 @@ created: [today's date]
 
         elif result.returncode == -1:
             logger.error(f"   ⏱️  Claude timed out")
-            self.db.update_task_status(task_id, "failed",
-                                       error_message="Timeout")
+            self.db.update_task_status(task_id, "failed", error_message="Timeout")
 
         else:
             logger.error(f"   ❌ Claude failed: {result.stderr[:200]}")
-            self.db.update_task_status(task_id, "failed",
-                                       error_message=result.stderr[:200])
+            self.db.update_task_status(task_id, "failed", error_message=result.stderr[:200])
 
 
 # =============================================================================
 # ApprovedMonitor
 # =============================================================================
+
 
 class ApprovedMonitor(FileSystemEventHandler):
     """
@@ -359,10 +271,10 @@ class ApprovedMonitor(FileSystemEventHandler):
     """
 
     def __init__(self, db: TaskDatabase, vault_path: Path):
-        self.db               = db
-        self.vault_path       = vault_path
-        self.approved         = vault_path / "Approved"
-        self.done             = vault_path / "Done"
+        self.db = db
+        self.vault_path = vault_path
+        self.approved = vault_path / "Approved"
+        self.done = vault_path / "Done"
         self.processing_files = set()
 
     def on_created(self, event):
@@ -423,6 +335,7 @@ Please:
 # Orchestrator
 # =============================================================================
 
+
 class Orchestrator:
     """
     Starts all monitors and watchers.
@@ -431,7 +344,7 @@ class Orchestrator:
 
     def __init__(self, vault_path: Optional[Path] = None):
         self.vault_path = vault_path or settings.vault_path
-        self.db         = TaskDatabase(DB_PATH)
+        self.db = TaskDatabase(DB_PATH)
         self.observers: List[Observer] = []
 
         self._setup_vault()
@@ -483,17 +396,10 @@ class Orchestrator:
         # Filesystem watcher — watches Inbox/Drop/
         try:
             from watchers.filesystem_watcher import FilesystemWatcher
+
             drop_folder = self.vault_path / "Inbox" / "Drop"
-            fs_watcher  = FilesystemWatcher(
-                str(self.vault_path),
-                str(drop_folder),
-                self.db
-            )
-            t = threading.Thread(
-                target = fs_watcher.run,
-                daemon = True,
-                name   = "FilesystemWatcher"
-            )
+            fs_watcher = FilesystemWatcher(str(self.vault_path), str(drop_folder), self.db)
+            t = threading.Thread(target=fs_watcher.run, daemon=True, name="FilesystemWatcher")
             t.start()
             time.sleep(1)
             if t.is_alive():
@@ -508,15 +414,12 @@ class Orchestrator:
         # Gmail watcher — optional, skipped if not configured
         try:
             from watchers.gmail_watcher import GmailWatcher
+
             gmail = GmailWatcher(
-                vault_path       = str(self.vault_path),
-                credentials_path = os.getenv("GMAIL_CREDENTIALS_PATH", "credentials.json"),
+                vault_path=str(self.vault_path),
+                credentials_path=os.getenv("GMAIL_CREDENTIALS_PATH", "credentials.json"),
             )
-            threading.Thread(
-                target = gmail.run,
-                daemon = True,
-                name   = "GmailWatcher"
-            ).start()
+            threading.Thread(target=gmail.run, daemon=True, name="GmailWatcher").start()
             logger.info("   ✅ Gmail watcher running")
         except ImportError:
             logger.warning("   ⚠️  Gmail libraries not installed — skipping")
@@ -556,6 +459,7 @@ class Orchestrator:
 # Entry point
 # =============================================================================
 
+
 def main():
     import argparse
 
@@ -568,5 +472,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main() 
-  
+    main()

@@ -14,15 +14,15 @@ class Settings(BaseSettings):
     Application settings loaded from environment variables and .env file.
 
     Usage:
-        settings = Settings()
+        from core.config import settings
 
         # Access settings
         print(settings.vault_path)
-        print(settings.database_url)
+        print(settings.logs_dir)
 
         # Check mode
         if settings.dev_mode:
-            print("Development mode enabled")
+            print("Development mode - console output enabled")
     """
 
     # ========================================================================
@@ -98,31 +98,6 @@ class Settings(BaseSettings):
     )
 
     # ========================================================================
-    # Database Settings
-    # ========================================================================
-
-    database_url: str = Field(
-        default="sqlite:///database/tasks.db",
-        description="Database connection URL"
-    )
-
-    @field_validator("database_url", mode="after")
-    @classmethod
-    def validate_database_url(cls, v):
-        """Validate database URL format."""
-        if not v:
-            raise ValueError("DATABASE_URL cannot be empty")
-
-        # Check for supported databases
-        supported = ["sqlite", "postgresql", "mysql"]
-        if not any(v.startswith(db) for db in supported):
-            raise ValueError(
-                f"Unsupported database URL. Must start with: {', '.join(supported)}"
-            )
-
-        return v
-
-    # ========================================================================
     # Email Settings (Optional)
     # ========================================================================
 
@@ -148,94 +123,92 @@ class Settings(BaseSettings):
     # Logging Settings
     # ========================================================================
 
-    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
-        default="INFO",
-        description="Logging level"
+    logs_per_task_enabled: bool = Field(
+        default=True,
+        description="Enable detailed per-task log files"
     )
 
-    log_dir: Path = Field(
-        default=Path("./logs"),
-        description="Directory for log files"
-    )
-
-    @field_validator("log_dir", mode="before")
-    @classmethod
-    def validate_log_dir(cls, v):
-        """Convert string to Path."""
-        if isinstance(v, str):
-            return Path(v)
-        return v
-
     # ========================================================================
-    # Helper Properties
+    # Vault Paths (Computed Properties)
     # ========================================================================
 
     @property
-    def is_production(self) -> bool:
-        """Check if running in production mode."""
-        return not self.dev_mode and not self.dry_run
+    def needs_action_path(self) -> Path:
+        """Path to Needs_Action folder"""
+        return self.vault_path / "Needs_Action"
 
     @property
-    def is_development(self) -> bool:
-        """Check if running in development mode."""
-        return self.dev_mode or self.dry_run
+    def processing_path(self) -> Path:
+        """Path to Processing folder"""
+        return self.vault_path / "Processing"
 
     @property
-    def is_sqlite(self) -> bool:
-        """Check if using SQLite database."""
-        return self.database_url.startswith("sqlite")
+    def done_path(self) -> Path:
+        """Path to Done folder"""
+        return self.vault_path / "Done"
 
     @property
-    def is_postgresql(self) -> bool:
-        """Check if using PostgreSQL database."""
-        return self.database_url.startswith("postgresql")
+    def inbox_path(self) -> Path:
+        """Path to Inbox folder"""
+        return self.vault_path / "Inbox"
 
     @property
-    def is_mysql(self) -> bool:
-        """Check if using MySQL database."""
-        return self.database_url.startswith("mysql")
+    def drop_folder_path(self) -> Path:
+        """Path to Drop folder (for file watcher)"""
+        return self.inbox_path / "Drop"
 
-    # ========================================================================
-    # Validation Methods
-    # ========================================================================
+    @property
+    def drop_history_path(self) -> Path:
+        """Path to Drop_History folder"""
+        return self.inbox_path / "Drop_History"
 
-    def validate_for_production(self) -> None:
-        """
-        Validate settings for production deployment.
+    @property
+    def hash_registry_path(self) -> Path:
+        """Path to hash registry file"""
+        return self.inbox_path / ".hash_registry.json"
 
-        Raises:
-            ValueError: If settings are not suitable for production
-        """
-        errors = []
+    @property
+    def plans_path(self) -> Path:
+        """Path to Plans folder"""
+        return self.vault_path / "Plans"
 
-        if self.dry_run:
-            errors.append("DRY_RUN must be False in production")
+    @property
+    def pending_approval_path(self) -> Path:
+        """Path to Pending_Approval folder"""
+        return self.vault_path / "Pending_Approval"
 
-        if self.dev_mode:
-            errors.append("DEV_MODE must be False in production")
+    @property
+    def approved_path(self) -> Path:
+        """Path to Approved folder"""
+        return self.vault_path / "Approved"
 
-        if self.is_sqlite:
-            errors.append("SQLite not recommended for production. Use PostgreSQL.")
+    @property
+    def in_progress_path(self) -> Path:
+        """Path to In_Progress folder"""
+        return self.vault_path / "In_Progress"
 
-        if errors:
-            raise ValueError("Production validation failed:\n" + "\n".join(errors))
+    @property
+    def logs_dir(self) -> Path:
+        """Path to Logs directory (derived from vault_path)"""
+        return self.vault_path / "Logs"
 
-    # ========================================================================
-    # Display Methods
-    # ========================================================================
-
-    def summary(self) -> str:
-        """Get a summary of current settings (safe to log)."""
-        return f"""
-Settings Summary:
-  Vault Path: {self.vault_path}
-  Database: {'SQLite' if self.is_sqlite else 'PostgreSQL' if self.is_postgresql else 'MySQL'}
-  Mode: {'Development' if self.is_development else 'Production'}
-  Dry Run: {self.dry_run}
-  Claude Model: {self.claude_model}
-  Log Level: {self.log_level}
-  Gmail: {'Configured' if self.gmail_address else 'Not configured'}
-""".strip()
+    def ensure_vault_directories(self) -> None:
+        """Create all vault directories if they don't exist"""
+        directories = [
+            self.needs_action_path,
+            self.processing_path,
+            self.done_path,
+            self.inbox_path,
+            self.drop_folder_path,
+            self.drop_history_path,
+            self.plans_path,
+            self.pending_approval_path,
+            self.approved_path,
+            self.in_progress_path,
+            self.logs_dir,
+        ]
+        for directory in directories:
+            directory.mkdir(parents=True, exist_ok=True)
 
 
 # ============================================================================
