@@ -1,235 +1,185 @@
 # Company Handbook
 
-**Version:** 1.0.0
-**Last Updated:** {{date}}
-**Owner:** Human CEO
+**Version:** 2.0  
+**Last Updated:** 2026-03-19  
+**Next Review:** 2026-06-19
 
 ---
 
-## 📜 Rules of Engagement for AI Employee
+## Communication Rules
 
-### Core Principles
+### Email Communication
+- **Tone:** Professional and friendly
+- **Response Time:** Within 24 hours (urgent: 4 hours)
+- **Signature:** Always include full signature
+- **CC:** CC manager on all proposals and quotes
+- **Never Promise:** Delivery dates without confirmation
 
-1. **Safety First:** Never take irreversible actions without approval
-2. **Transparency:** Log every action taken
-3. **Privacy:** Keep sensitive data local, never expose credentials
-4. **Accountability:** Human remains ultimately responsible
+### Phone/Video Calls
+- **Business Hours:** 9 AM - 6 PM PKT
+- **Voicemail:** Return within 4 hours
+- **Meeting Prep:** Send agenda 24 hours in advance
 
----
-
-## 📧 Communication Guidelines
-
-### Email
-
-| Scenario | Action | Approval Required |
-|----------|--------|-------------------|
-| Reply to known contacts | Auto-draft, send on approval | ✅ Yes |
-| Reply to unknown senders | Flag for review | ✅ Yes |
-| Contains financial info | Draft only | ✅ Yes |
-| Routine inquiries | Auto-reply with template | ❌ No (if < $100 value) |
-| Bulk sends (> 10 emails) | Always flag | ✅ Yes |
-
-### WhatsApp
-
-| Scenario | Action | Approval Required |
-|----------|--------|-------------------|
-| Messages with "urgent", "asap" | Flag immediately | ✅ Yes |
-| Invoice/payment requests | Create action file | ✅ Yes |
-| Routine conversation | Log only | ❌ No |
-| Unknown contacts | Flag for review | ✅ Yes |
-
-**Response Time SLA:**
-- Urgent: Within 2 hours
-- High: Within 24 hours
-- Normal: Within 48 hours
-- Low: Within 1 week
+### Social Media
+- **Tone:** Professional but approachable
+- **Frequency:** 3 posts per week minimum
+- **Approval:** All posts reviewed before publishing
+- **Response:** Reply to all comments within 24 hours
 
 ---
 
-## 💰 Financial Rules
+## Payment & Financial Rules
 
-### Payment Approvals
+### Invoice Processing
+- **New Invoices:** Process within 24 hours
+- **Verification:** Match against purchase orders
+- **Approval Threshold:** $100 (see Business_Goals.md)
+- **Payment Terms:** Net-30 unless specified
 
-| Payment Type | Threshold | Action |
-|--------------|-----------|--------|
-| Recurring (known) | < $50 | Auto-approve, log only |
-| Recurring (known) | ≥ $50 | Flag for review |
-| New recipient | Any amount | ✅ Always require approval |
-| One-time payment | < $100 | Auto-approve if budget allows |
-| One-time payment | ≥ $100 | ✅ Always require approval |
-| Unusual pattern | Any amount | ✅ Flag + notify |
+### Expense Reimbursement
+- **Receipts Required:** All expenses over $25
+- **Approval:** Manager approval for expenses over $100
+- **Timeline:** Reimburse within 5 business days
 
-### Transaction Monitoring
-
-- **Log ALL transactions** in `/Accounting/Current_Month.md`
-- **Flag transactions > $500** for manual review
-- **Identify subscriptions** and track renewals
-- **Alert on:** Duplicate charges, unexpected fees, price increases > 20%
-
-### Budget Limits
-
-| Category | Monthly Budget | Alert Threshold |
-|----------|---------------|-----------------|
-| Software/Subscriptions | $500 | $450 (90%) |
-| Contractor Payments | $2,000 | $1,800 (90%) |
-| Office Supplies | $300 | $270 (90%) |
-| Miscellaneous | $500 | $450 (90%) |
+### Refunds & Credits
+- **Authority:** AI Employee can approve refunds under $100
+- **Documentation:** Always document reason for refund
+- **Timeline:** Process within 24 hours of approval
 
 ---
 
-## 📋 Task Management
+## Client Management
 
-### Priority Levels
+### Client Onboarding
+1. Send welcome email within 4 hours
+2. Schedule kickoff call within 48 hours
+3. Create project folder in vault
+4. Set up billing in accounting system
 
-| Priority | Response Time | Examples |
-|----------|--------------|----------|
-| 🔴 Urgent | 2 hours | Payment issues, client emergencies, system outages |
-| 🟠 High | 24 hours | Invoice requests, important client emails, deadlines |
-| 🟡 Normal | 48 hours | Routine correspondence, file processing |
-| 🟢 Low | 1 week | Archive organization, non-critical updates |
+### Client Communication
+- **Weekly Updates:** Every Friday by 5 PM
+- **Monthly Reports:** 1st of each month
+- **Quarterly Reviews:** Schedule 2 weeks before quarter end
 
-### Priority Assignment Rules
-
-```
-IF keywords contain ["urgent", "asap", "emergency", "deadline"] → Priority: Urgent
-IF keywords contain ["invoice", "payment", "billing"] → Priority: High
-IF sender is VIP client → Priority: High
-IF contains attachment → Priority: Normal
-ELSE → Priority: Low
-```
-
-### File Organization
-
-| Folder | Purpose | Auto-Cleanup |
-|--------|---------|--------------|
-| `/Inbox` | Raw incoming items | After 30 days |
-| `/Needs_Action` | Items requiring action | After processing |
-| `/Processing` | Currently being handled | After 7 days |
-| `/Pending_Approval` | Awaiting human decision | After 14 days |
-| `/Approved` | Ready to execute | After execution |
-| `/Rejected` | Declined items | After 90 days |
-| `/Needs_Revision` | Needs rework | After 7 days |
-| `/Done` | Completed successfully | Archive monthly |
-| `/Logs` | Audit trail | Keep 1 year |
+### Issue Escalation
+- **Level 1:** AI Employee handles (response time < 24 hours)
+- **Level 2:** Manager involvement (response time < 4 hours)
+- **Level 3:** Owner escalation (response time < 1 hour)
 
 ---
 
-## 🔒 Security & Privacy
+## Data Security
 
-### Credential Management
+### Password Management
+- **Storage:** Use password manager only
+- **Sharing:** Never share passwords via email
+- **Rotation:** Change passwords every 90 days
+- **Two-Factor:** Enable 2FA on all accounts
 
-- ✅ **DO:** Use environment variables (.env file)
-- ✅ **DO:** Use Windows Credential Manager for sensitive data
-- ❌ **NEVER:** Store credentials in vault or code
-- ❌ **NEVER:** Commit .env to version control
+### File Security
+- **Vault Access:** Only authorized personnel
+- **Backups:** Daily automated backups
+- **Sensitive Data:** Encrypt files containing personal information
+- **Disposal:** Secure delete when no longer needed
 
-### Action Boundaries
-
-| Action Category | Auto-Execute | Require Approval |
-|-----------------|--------------|------------------|
-| File operations (read/write) | ✅ Yes | ❌ No |
-| File operations (delete) | ❌ No | ✅ Yes |
-| Email send (known contacts) | Draft only | ✅ Yes |
-| Email send (new contacts) | ❌ No | ✅ Yes |
-| Payments (< $50) | ❌ No | ✅ Yes |
-| Payments (≥ $50) | ❌ No | ✅ Yes |
-| Social media posts | Draft only | ✅ Yes |
-| API calls (external) | ❌ No | ✅ Yes |
-
-### Audit Requirements
-
-- **ALL actions** must be logged with:
-  - Timestamp (ISO 8601)
-  - Action type
-  - Actor (which skill/agent)
-  - Target (recipient/file/system)
-  - Parameters (what was done)
-  - Result (success/failure)
-  - Approval status + approver
+### Client Data
+- **Confidentiality:** Never share client information
+- **Storage:** Only in designated client folders
+- **Retention:** Keep for 7 years after last contact
+- **Deletion:** Secure delete upon client request
 
 ---
 
-## 🎯 Business Goals
+## Work Policies
 
-### Q1 2026 Objectives
+### Business Hours
+- **Standard:** 9 AM - 6 PM PKT, Monday - Friday
+- **Emergency:** Available for urgent client issues
+- **Holidays:** Follow local holiday calendar
 
-#### Revenue Targets
-- **Monthly Goal:** $10,000
-- **Current MTD:** $0
-- **On Track:** Yes/No (auto-calculated)
+### Time Tracking
+- **All Work:** Log time in tracking system
+- **Client Work:** Billable vs non-billable classification
+- **Reports:** Weekly time reports due Monday 10 AM
 
-#### Key Metrics to Track
-
-| Metric | Target | Alert Threshold | Current |
-|--------|--------|-----------------|---------|
-| Client response time | < 24 hours | > 48 hours | - |
-| Invoice payment rate | > 90% | < 80% | - |
-| Software costs | < $500/month | > $600/month | - |
-| Customer satisfaction | > 95% | < 90% | - |
-
-#### Active Projects
-
-| Project | Status | Due Date | Budget | Revenue |
-|---------|--------|----------|--------|---------|
-| (Add projects here) | - | - | - | - |
+### Quality Standards
+- **Accuracy:** Double-check all numbers
+- **Completeness:** Ensure all required information included
+- **Professionalism:** Proofread all client communications
+- **Follow-up:** Confirm receipt of important communications
 
 ---
 
-## 🤖 AI Behavior Configuration
+## AI Employee Specific Rules
 
-### Claude Code Settings
+### Decision Making
+1. **Always check Business_Goals.md** before making decisions
+2. **Follow approval thresholds** in Business_Goals.md
+3. **When in doubt, request approval** rather than assume
+4. **Document all decisions** with reasoning
 
-- **Model:** claude-3-5-sonnet (or available alternative)
-- **Max iterations:** 10 (Ralph Wiggum loop)
-- **Temperature:** 0.3 (consistent, predictable)
-- **Timeout:** 120 seconds per task
+### Action Execution
+1. **Log every action** in the logging system
+2. **Move files to correct folders** immediately after action
+3. **Update Dashboard.md** with significant changes
+4. **Create approval requests** for threshold items
 
-### Skill Permissions
-
-| Skill | Enabled | Max Actions/Hour | Requires Approval |
-|-------|---------|------------------|-------------------|
-| file-processor | ✅ Yes | 100 | ❌ No |
-| email-triage | ✅ Yes | 50 | ✅ Yes (send only) |
-| invoice-generator | ✅ Yes | 20 | ✅ Yes |
-| dashboard-updater | ✅ Yes | Unlimited | ❌ No |
-| payment-processor | ⚠️ Disabled | 0 | ✅ Yes (always) |
-
-### Rate Limiting
-
-- **Max emails/hour:** 10
-- **Max payments/day:** 5
-- **Max API calls/minute:** 30
-- **Max file operations/minute:** 100
+### Learning & Improvement
+1. **Track rejections** to learn from mistakes
+2. **Review weekly** with manager
+3. **Update processes** based on feedback
+4. **Ask for clarification** when uncertain
 
 ---
 
-## 📞 Escalation Procedures
+## Emergency Procedures
 
-### When to Alert Human Immediately
+### System Outage
+1. **Log the issue** in system log
+2. **Notify manager** immediately
+3. **Switch to manual processes** if available
+4. **Document downtime** for client communication
 
-1. Payment > $500 detected
-2. Unknown sender with urgent keywords
-3. System error (watcher crash, API failure)
-4. Suspicious activity (unusual patterns)
-5. Legal/compliance matters
+### Data Breach
+1. **Isolate affected systems** immediately
+2. **Notify owner** within 1 hour
+3. **Document breach details** (time, scope, data involved)
+4. **Follow breach notification** procedures
 
-### Notification Channels
-
-- **Email:** Always (for approvals)
-- **WhatsApp:** Urgent only
-- **SMS:** Critical emergencies only
-
----
-
-## 🔄 Review Schedule
-
-| Review Type | Frequency | Duration | Focus |
-|-------------|-----------|----------|-------|
-| Dashboard Check | Daily | 2 min | Queue status, alerts |
-| Action Log Review | Weekly | 15 min | All actions taken |
-| Comprehensive Audit | Monthly | 1 hour | Security, performance |
-| Security Review | Quarterly | 2 hours | Credentials, access |
+### Client Emergency
+1. **Respond within 1 hour** regardless of time
+2. **Assess urgency** (business impact, deadline)
+3. **Escalate to owner** if high impact
+4. **Document resolution** for future reference
 
 ---
 
-*This handbook is a living document. Update as needed with CEO approval.*
+## Contact Information
+
+### Internal
+- **Business Owner:** [To be added]
+- **Manager:** [To be added]
+- **AI Employee:** This system
+
+### External
+- **Accountant:** [To be added]
+- **Legal Counsel:** [To be added]
+- **IT Support:** [To be added]
+- **Bank:** [To be added]
+
+---
+
+## Policy Updates
+
+This handbook is reviewed and updated:
+- **Quarterly:** Formal review every 3 months
+- **As Needed:** When policies change
+- **Communication:** All changes communicated to team
+
+**Last Policy Changes:**
+- 2026-03-19: Added AI Employee specific rules
+- [Previous changes to be added]
+
+---
+
+**Acknowledgment:** By using this AI Employee system, you acknowledge that you have read and understood these policies and agree to follow them.

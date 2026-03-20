@@ -62,6 +62,12 @@ class Settings(BaseSettings):
         description="Interval in seconds between watcher checks"
     )
 
+    # Watcher Enable Flags
+    enable_filesystem_watcher: bool = Field(
+        default=True,
+        description="Enable Filesystem Watcher (watches Drop/ folder)"
+    )
+
     # ========================================================================
     # Security Settings
     # ========================================================================
@@ -193,6 +199,16 @@ class Settings(BaseSettings):
         return self.vault_path / "In_Progress"
 
     @property
+    def rejected_path(self) -> Path:
+        """Path to Rejected folder"""
+        return self.vault_path / "Rejected"
+
+    @property
+    def needs_revision_path(self) -> Path:
+        """Path to Needs_Revision folder"""
+        return self.vault_path / "Needs_Revision"
+
+    @property
     def logs_dir(self) -> Path:
         """Path to Logs directory (derived from vault_path)"""
         return self.vault_path / "Logs"
@@ -209,7 +225,8 @@ class Settings(BaseSettings):
             self.plans_path,
             self.pending_approval_path,
             self.approved_path,
-            self.in_progress_path,
+            self.rejected_path,
+            self.needs_revision_path,
             self.logs_dir,
         ]
         for directory in directories:
