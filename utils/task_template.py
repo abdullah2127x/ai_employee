@@ -44,6 +44,15 @@ original_name: {original_name}
 {additional_yaml_fields}detected: {detected}
 priority: {priority}
 status: pending
+
+# AI Processing (filled by Claude Runner)
+ai_processed: [PENDING]
+ai_processed_at: [PENDING]
+ai_category: [PENDING]
+ai_decision: [PENDING]
+ai_action_taken: [PENDING]
+ai_response: |
+  [PENDING]
 ---
 
 # {title}: {original_name}
@@ -68,7 +77,14 @@ status: pending
 
 ## Processing Notes
 
-(Add notes here during processing)
+<!-- CLAUDE_RESPONSE_START -->
+**Category:** [PENDING]
+**Decision:** [PENDING]
+**Action Taken:** [PENDING]
+
+**AI Response:**
+[PENDING]
+<!-- CLAUDE_RESPONSE_END -->
 
 ---
 
@@ -223,3 +239,109 @@ def _format_size(size: int) -> str:
             return f"{size:.1f} {unit}"
         size /= 1024
     return f"{size:.1f} TB"
+
+
+# ============================================================================
+# TEMPLATE FILLING FUNCTIONS (For Claude Runner)
+# ============================================================================
+
+import re
+from datetime import datetime
+from typing import Dict, Any
+
+
+def fill_ai_placeholders(content: str, decision: Dict[str, Any]) -> str:
+    """
+    Fill all AI-related placeholders in metadata file with Claude's response.
+    
+    Args:
+        content: Original markdown content with [PENDING] placeholders
+        decision: Claude's JSON response (decision, category, ai_action_taken, ai_response)
+    
+    Returns:
+        Updated content with all placeholders filled
+    """
+    timestamp = datetime.now().isoformat()
+    
+    # Fill YAML frontmatter placeholders
+    content = re.sub(
+        r'ai_processed: \[PENDING\]',
+        f'ai_processed: true',
+        content
+    )
+    content = re.sub(
+        r'ai_processed_at: \[PENDING\]',
+        f'ai_processed_at: {timestamp}',
+        content
+    )
+    content = re.sub(
+        r'ai_category: \[PENDING\]',
+        f'ai_category: {decision.get("category", "unknown")}',
+        content
+    )
+    content = re.sub(
+        r'ai_decision: \[PENDING\]',
+        f'ai_decision: {decision.get("decision", "unknown")}',
+        content
+    )
+    content = re.sub(
+        r'ai_action_taken: \[PENDING\]',
+        f'ai_action_taken: {decision.get("ai_action_taken", "unknown")}',
+        content
+    )
+    
+    # Fill ai_response in YAML (handle multi-line)
+    ai_response = decision.get("ai_response", "No response")
+    # Escape pipe characters and indent properly
+    escaped_response = ai_response.replace('|', '\\|')
+    # Match the exact pattern with proper escaping
+    content = re.sub(
+        r'ai_response: \|\n  \[PENDING\]',
+        f'ai_response: |\n  {escaped_response}',
+        content
+    )
+    
+    # Fill body placeholders (Processing Notes section)
+    category = decision.get("category", "unknown").title()
+    action_taken = decision.get("ai_action_taken", "unknown")
+    
+    body_replacement = f"""<!-- CLAUDE_RESPONSE_START -->
+**Category:** {category}
+**Decision:** {decision.get("decision", "unknown")}
+**Action Taken:** {action_taken}
+
+**AI Response:**
+{ai_response}
+<!-- CLAUDE_RESPONSE_END -->"""
+    
+    # Find and replace the entire CLAUDE_RESPONSE section
+    pattern = r'<!-- CLAUDE_RESPONSE_START -->.*?<!-- CLAUDE_RESPONSE_END -->'
+    content = re.sub(pattern, body_replacement, content, flags=re.DOTALL)
+    
+    return content
+
+
+def validate_no_pending_placeholders(content: str) -> bool:
+    """
+    Validate that all [PENDING] placeholders have been replaced.
+    
+    Args:
+        content: Markdown content to validate
+    
+    Returns:
+        True if no [PENDING] found, False otherwise
+    """
+    return '[PENDING]' not in content
+
+
+def get_pending_count(content: str) -> int:
+    """
+    Count remaining [PENDING] placeholders.
+    
+    Args:
+        content: Markdown content
+    
+    Returns:
+        Number of remaining [PENDING] placeholders
+    """
+    return content.count('[PENDING]')

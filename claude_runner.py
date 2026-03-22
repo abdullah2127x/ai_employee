@@ -34,6 +34,7 @@ sys.path.insert(0, str(project_root))
 
 from core.config import settings
 from utils.logging_manager import LoggingManager
+from utils.task_template import fill_ai_placeholders, validate_no_pending_placeholders, get_pending_count
 
 logger = LoggingManager()
 
@@ -142,15 +143,18 @@ def invoke_claude(prompt: str, timeout: int = 300) -> subprocess.CompletedProces
         return result
 
 
-def parse_claude_output(stdout: str) -> dict:
+def parse_and_validate_json(stdout: str) -> dict:
     """
-    Parse Claude's JSON output.
-
+    Parse and validate Claude's JSON output.
+    
     Args:
-        stdout: Claude's output (may contain JSON block)
-
+        stdout: Claude's JSON output (strict JSON only)
+    
     Returns:
-        dict with 'decision' key and metadata
+        dict with validated fields
+    
+    Raises:
+        ValueError: If JSON is invalid or missing required fields
     """
     # Try to find JSON in output
     try:
@@ -160,14 +164,41 @@ def parse_claude_output(stdout: str) -> dict:
 
         if start >= 0 and end > start:
             json_str = stdout[start:end]
-            decision = json.loads(json_str)
-            return decision
         else:
-            # No JSON found, assume completion
-            return {"decision": "complete_task"}
-
+            raise ValueError("No JSON found in output")
+        
+        decision = json.loads(json_str)
+        
+        # Validate required fields
+        required_fields = ['decision', 'category', 'ai_action_taken', 'ai_response']
+        for field in required_fields:
+            if field not in decision:
+                raise ValueError(f"Missing required field: {field}")
+        
+        # Validate field values
+        valid_decisions = ['complete_task', 'create_approval_request', 'needs_revision']
+        if decision['decision'] not in valid_decisions:
+            raise ValueError(f"Invalid decision: {decision['decision']}. Must be one of {valid_decisions}")
+        
+        valid_categories = ['general', 'important', 'urgent', 'invoice', 'payment']
+        if decision['category'] not in valid_categories:
+            raise ValueError(f"Invalid category: {decision['category']}. Must be one of {valid_categories}")
+        
+        return decision
+        
     except json.JSONDecodeError as e:
-        logger.log_warning(f"Could not parse JSON from Claude output: {e}", actor="claude_runner")
+        raise ValueError(f"Claude did not return valid JSON: {e}")
+
+
+def parse_claude_output(stdout: str) -> dict:
+    """
+    DEPRECATED: Use parse_and_validate_json() instead.
+    
+    Parse Claude's JSON output (legacy, no validation).
+    """
+    try:
+        return parse_and_validate_json(stdout)
+    except ValueError:
         return {"decision": "complete_task"}
 
 
@@ -290,24 +321,34 @@ def process_task(task_file: Path):
     system_prompt = load_system_prompt()
     context = load_context_files()
 
-    # Build prompt - Ask Claude for response too
-    prompt = f"""You are an AI Employee assistant. Process the task.
+    # Build STRICT JSON-ONLY prompt
+    prompt = f"""You are an AI Employee WORKER. Process the task and return ONLY JSON.
+
+CRITICAL RULES:
+1. Output ONLY JSON - no markdown, no text before or after
+2. Do not include any explanations
+3. Do not use code blocks or formatting
+4. Just raw JSON
 
 Task file: {task_file.name}
+
 Task content:
 {task_content}
 
-Output your response in this JSON format ONLY:
+Output ONLY this JSON format (no other text):
 {{
   "decision": "complete_task" | "create_approval_request" | "needs_revision",
   "category": "general" | "important" | "urgent" | "invoice" | "payment",
-  "response": "Your response or analysis here",
-  "action_taken": "What you did"
+  "ai_action_taken": "What you did",
+  "ai_response": "Your full response text"
 }}
 
 Examples:
-- For "Hey I am abdullah" → {{"decision": "complete_task", "category": "general", "response": "Hello! Nice to meet you.", "action_taken": "Added greeting response"}}
-- For important note → {{"decision": "complete_task", "category": "important", "response": "This has been categorized as important.", "action_taken": "Categorized and responded"}}
+Input: "Hey I am abdullah"
+Output: {{"decision": "complete_task", "category": "general", "ai_action_taken": "Added greeting response", "ai_response": "Hello! Nice to meet you."}}
+
+Input: "Please categorize this as important"
+Output: {{"decision": "complete_task", "category": "important", "ai_action_taken": "Categorized as important", "ai_response": "This has been marked as important per your request."}}
 
 Output ONLY the JSON."""
 
@@ -320,28 +361,45 @@ Output ONLY the JSON."""
         move_file(task_file, settings.vault_path / "Needs_Revision", "Claude failed")
         return
 
-    # Parse output
-    decision = parse_claude_output(result.stdout)
+    # Parse and VALIDATE JSON
+    try:
+        decision = parse_and_validate_json(result.stdout)
+    except ValueError as e:
+        logger.log_error(f"Invalid JSON from Claude: {e}", actor="claude_runner")
+        move_file(task_file, settings.vault_path / "Needs_Revision", f"Invalid JSON: {e}")
+        return
 
     logger.write_to_timeline(
         f"Claude decision: {decision.get('decision', 'unknown')}",
         actor="claude_runner",
         message_level="INFO",
     )
-    
-    # Get response from Claude
-    response = decision.get('response', '')
-    category = decision.get('category', 'general')
-    action_taken = decision.get('action_taken', '')
-    
-    # If Claude provided a response, add it to the file
-    if response:
+
+    # Fill template with Claude's JSON data
+    try:
+        content = task_file.read_text(encoding='utf-8')
+        updated_content = fill_ai_placeholders(content, decision)
+        
+        # Validate all [PENDING] placeholders replaced
+        if not validate_no_pending_placeholders(updated_content):
+            count = get_pending_count(updated_content)
+            logger.log_error(f"{count} placeholders not filled!", actor="claude_runner")
+            move_file(task_file, settings.vault_path / "Needs_Revision", f"{count} placeholders not filled")
+            return
+        
+        # Write updated content
+        task_file.write_text(updated_content, encoding='utf-8')
+        
         logger.write_to_timeline(
-            f"Adding Claude's response to file",
+            f"Template filled successfully",
             actor="claude_runner",
             message_level="INFO",
         )
-        add_response_to_file(task_file, response, category, action_taken)
+        
+    except Exception as e:
+        logger.log_error(f"Failed to fill template: {e}", error=e, actor="claude_runner")
+        move_file(task_file, settings.vault_path / "Needs_Revision", f"Template error: {e}")
+        return
 
     # Execute decision
     decision_type = decision.get("decision", "complete_task")
