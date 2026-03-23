@@ -43,7 +43,8 @@ from utils.dashboard import write_dashboard
 
 from watchers.folder_watcher import FolderWatcher
 from watchers.filesystem_watcher import FilesystemWatcher
-from watchers.gmail_watcher import GmailWatcher
+from watchers.gmail_watcher_oauth import GmailWatcher
+from watchers.gmail_watcher_imap import GmailWatcherIMAP
 
 logger = LoggingManager()
 
@@ -127,22 +128,55 @@ class Orchestrator:
         self.gmail_watcher_thread = None
         if settings.enable_gmail_watcher:
             try:
-                # Determine credentials path
-                creds_path = settings.gmail_credentials_path
-                if creds_path is None:
-                    creds_path = settings.vault_path / "credentials.json"
+                # Check mode: 'imap' (development) or 'oauth' (production)
+                watcher_mode = settings.gmail_watcher_mode.lower()
+                
+                if watcher_mode == "imap":
+                    # IMAP mode (development) - uses app password
+                    if not settings.gmail_imap_address or not settings.gmail_imap_app_password:
+                        logger.log_error(
+                            "Gmail IMAP credentials missing. Set GMAIL_IMAP_ADDRESS "
+                            "and GMAIL_IMAP_APP_PASSWORD in .env",
+                            actor="orchestrator",
+                        )
+                    else:
+                        self.gmail_watcher = GmailWatcherIMAP(
+                            email_address=settings.gmail_imap_address,
+                            app_password=settings.gmail_imap_app_password,
+                            check_interval=settings.gmail_watcher_check_interval,
+                            gmail_query=settings.gmail_watcher_query,
+                        )
+                        logger.write_to_timeline(
+                            f"Gmail Watcher enabled (IMAP mode) | Email: {settings.gmail_imap_address} | "
+                            f"Query: {settings.gmail_watcher_query} | Interval: {settings.gmail_watcher_check_interval}s",
+                            actor="orchestrator",
+                            message_level="INFO",
+                        )
+                
+                elif watcher_mode == "oauth":
+                    # OAuth mode (production) - uses credentials.json
+                    creds_path = settings.gmail_credentials_path
+                    if creds_path is None:
+                        creds_path = settings.vault_path / "credentials.json"
 
-                self.gmail_watcher = GmailWatcher(
-                    credentials_path=creds_path,
-                    check_interval=settings.gmail_watcher_check_interval,
-                    gmail_query=settings.gmail_watcher_query,
-                )
-                logger.write_to_timeline(
-                    f"Gmail Watcher enabled | Query: {settings.gmail_watcher_query} | "
-                    f"Interval: {settings.gmail_watcher_check_interval}s",
-                    actor="orchestrator",
-                    message_level="INFO",
-                )
+                    self.gmail_watcher = GmailWatcher(
+                        credentials_path=creds_path,
+                        check_interval=settings.gmail_watcher_check_interval,
+                        gmail_query=settings.gmail_watcher_query,
+                    )
+                    logger.write_to_timeline(
+                        f"Gmail Watcher enabled (OAuth mode) | Query: {settings.gmail_watcher_query} | "
+                        f"Interval: {settings.gmail_watcher_check_interval}s",
+                        actor="orchestrator",
+                        message_level="INFO",
+                    )
+                
+                else:
+                    logger.log_error(
+                        f"Invalid GMAIL_WATCHER_MODE: {watcher_mode}. Must be 'imap' or 'oauth'",
+                        actor="orchestrator",
+                    )
+                    
             except ImportError as e:
                 logger.log_warning(
                     f"Gmail Watcher disabled - libraries not installed: {e}",

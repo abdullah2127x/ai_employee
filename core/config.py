@@ -78,6 +78,12 @@ class Settings(BaseSettings):
         description="Enable Gmail Watcher (watches Gmail for new messages)"
     )
 
+    # Gmail Watcher Mode: 'imap' (development) or 'oauth' (production)
+    gmail_watcher_mode: str = Field(
+        default="imap",
+        description="Gmail watcher mode: 'imap' for development (app password), 'oauth' for production"
+    )
+
     # Gmail Watcher Settings
     gmail_watcher_check_interval: int = Field(
         default=120,
@@ -91,9 +97,21 @@ class Settings(BaseSettings):
         description="Gmail search query for filtering messages"
     )
 
+    # Gmail OAuth Settings (Production)
     gmail_credentials_path: Optional[Path] = Field(
         default=None,
-        description="Path to Gmail API credentials JSON file"
+        description="Path to Gmail API credentials JSON file (OAuth mode)"
+    )
+
+    # Gmail IMAP Settings (Development)
+    gmail_imap_address: Optional[str] = Field(
+        default=None,
+        description="Gmail address for IMAP watcher (development mode)"
+    )
+
+    gmail_imap_app_password: Optional[str] = Field(
+        default=None,
+        description="Gmail app password for IMAP watcher (development mode)"
     )
 
     @field_validator("gmail_credentials_path", mode="before")
@@ -104,9 +122,21 @@ class Settings(BaseSettings):
             return Path(v)
         return v
 
-    # ========================================================================
-    # Security Settings
-    # ========================================================================
+    @field_validator("gmail_address", mode="after")
+    @classmethod
+    def validate_gmail_address(cls, v):
+        """Validate Gmail address if provided."""
+        if v and "@" not in v:
+            raise ValueError("Invalid Gmail address")
+        return v
+
+    @field_validator("gmail_imap_address", mode="after")
+    @classmethod
+    def validate_gmail_imap_address(cls, v):
+        """Validate Gmail IMAP address if provided."""
+        if v and "@" not in v:
+            raise ValueError("Invalid Gmail IMAP address")
+        return v
 
     dry_run: bool = Field(
         default=True,
