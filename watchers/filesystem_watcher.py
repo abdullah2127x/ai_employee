@@ -1,3 +1,4 @@
+# monitor drop folder only
 """
 filesystem_watcher.py - Enhanced file system watcher with event tracking
 

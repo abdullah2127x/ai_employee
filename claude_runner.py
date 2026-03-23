@@ -119,7 +119,7 @@ Return ONLY the JSON decision as defined in CLAUDE.md. No other text."""
 # ============================================================================
 
 
-def invoke_claude(prompt: str, timeout: int = 300) -> subprocess.CompletedProcess:
+def invoke_claude(prompt: str, task_id: str, timeout: int = 300) -> subprocess.CompletedProcess:
     """
     Invoke Claude Code with a prompt.
     Runs from vault/ so CLAUDE.md is auto-loaded.
@@ -127,9 +127,11 @@ def invoke_claude(prompt: str, timeout: int = 300) -> subprocess.CompletedProces
     Uses shell=True so that ccr/claude is found on PATH exactly as it is
     in the terminal. Writes prompt to a temp file and reads it with
     PowerShell Get-Content (Windows-compatible, no bash required).
+    
+    NEW (v2.2): Uses unique temp file per task_id to support concurrent execution.
     """
-    # Write prompt to temp file
-    prompt_file = settings.vault_path / ".claude" / "_runner_prompt.tmp"
+    # Write prompt to temp file - UNIQUE per task_id to avoid race conditions
+    prompt_file = settings.vault_path / ".claude" / f"_prompt_{task_id}.tmp"
     prompt_file.parent.mkdir(parents=True, exist_ok=True)
     prompt_file.write_text(prompt, encoding="utf-8")
 
@@ -374,7 +376,7 @@ def process_task(task_file: Path) -> bool:
     prompt = build_prompt(task_file, task_content, task_type)
 
     # ── Step 3: Invoke Claude ───────────────────────────────────────────────
-    result = invoke_claude(prompt)
+    result = invoke_claude(prompt, task_id)
 
     if result.returncode != 0:
         msg = f"Claude exited {result.returncode}: {result.stderr[:200]}"

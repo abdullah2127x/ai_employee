@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-orchestrator.py - AI Employee Orchestrator (v2.1)
+orchestrator.py - AI Employee Orchestrator (v2.2)
 
 New in v2.1:
 - Runner_Status/ watcher: orchestrator now sees EXACTLY what claude_runner
@@ -10,6 +10,10 @@ New in v2.1:
   After that they move to Dead_Letter/ and a warning is logged.
   retry_count is tracked in the task file's YAML frontmatter.
 - Dead_Letter/ folder: tasks that failed MAX_RETRIES times land here.
+
+New in v2.2:
+- Concurrent-safe: claude_runner now uses unique temp files per task_id
+- Stale prompt cleanup: removes old temp prompt files on startup
 
 Architecture unchanged:
 - FilesystemWatcher (Drop/) → Needs_Action/
@@ -26,7 +30,7 @@ import subprocess
 import threading
 import shutil
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict
 
 project_root = Path(__file__).parent.resolve()
@@ -44,6 +48,42 @@ logger = LoggingManager()
 
 # Maximum times a task is retried from Needs_Revision before Dead_Letter
 MAX_RETRIES = 3
+
+
+def cleanup_stale_prompt_files():
+    """
+    Remove stale prompt temp files older than 1 hour.
+    
+    Called once at orchestrator startup to clean up after crashed runs.
+    Prevents accumulation of _prompt_*.tmp files in vault/.claude/
+    """
+    prompt_folder = settings.vault_path / ".claude"
+    if not prompt_folder.exists():
+        return
+    
+    cutoff = datetime.now() - timedelta(hours=1)
+    cleaned_count = 0
+    
+    for tmp_file in prompt_folder.glob("_prompt_*.tmp"):
+        try:
+            file_mtime = datetime.fromtimestamp(tmp_file.stat().st_mtime)
+            if file_mtime < cutoff:
+                tmp_file.unlink()
+                cleaned_count += 1
+                logger.write_to_timeline(
+                    f"Cleaned up stale prompt file: {tmp_file.name}",
+                    actor="orchestrator",
+                    message_level="INFO",
+                )
+        except Exception:
+            pass
+    
+    if cleaned_count > 0:
+        logger.write_to_timeline(
+            f"Startup cleanup: removed {cleaned_count} stale prompt file(s)",
+            actor="orchestrator",
+            message_level="INFO",
+        )
 
 
 class Orchestrator:
@@ -454,12 +494,15 @@ class Orchestrator:
 
 def main():
     logger.write_to_timeline(
-        "AI Employee Orchestrator v2.1 starting",
+        "AI Employee Orchestrator v2.2 starting",
         actor="orchestrator",
         message_level="INFO",
     )
 
     settings.ensure_vault_directories()
+
+    # Clean up stale prompt temp files from previous crashed runs
+    cleanup_stale_prompt_files()
 
     orchestrator = Orchestrator()
     orchestrator.start()
