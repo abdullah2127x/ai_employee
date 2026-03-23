@@ -28,7 +28,7 @@ matching skill before deciding:
 | Task type     | Skill to read                                      |
 |---------------|----------------------------------------------------|
 | `file_drop`   | `.claude/skills/process-file-drop/SKILL.md`        |
-| `email`       | `.claude/skills/process-email/SKILL.md` (future)   |
+| `email`       | `.claude/skills/process-email/SKILL.md`            |
 | `whatsapp`    | `.claude/skills/process-whatsapp/SKILL.md` (future)|
 | anything else | `.claude/skills/process-general/SKILL.md`          |
 

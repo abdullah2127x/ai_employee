@@ -43,6 +43,7 @@ from utils.dashboard import write_dashboard
 
 from watchers.folder_watcher import FolderWatcher
 from watchers.filesystem_watcher import FilesystemWatcher
+from watchers.gmail_watcher import GmailWatcher
 
 logger = LoggingManager()
 
@@ -121,6 +122,44 @@ class Orchestrator:
                 message_level="WARNING",
             )
 
+        # Gmail Watcher
+        self.gmail_watcher = None
+        self.gmail_watcher_thread = None
+        if settings.enable_gmail_watcher:
+            try:
+                # Determine credentials path
+                creds_path = settings.gmail_credentials_path
+                if creds_path is None:
+                    creds_path = settings.vault_path / "credentials.json"
+
+                self.gmail_watcher = GmailWatcher(
+                    credentials_path=creds_path,
+                    check_interval=settings.gmail_watcher_check_interval,
+                    gmail_query=settings.gmail_watcher_query,
+                )
+                logger.write_to_timeline(
+                    f"Gmail Watcher enabled | Query: {settings.gmail_watcher_query} | "
+                    f"Interval: {settings.gmail_watcher_check_interval}s",
+                    actor="orchestrator",
+                    message_level="INFO",
+                )
+            except ImportError as e:
+                logger.log_warning(
+                    f"Gmail Watcher disabled - libraries not installed: {e}",
+                    actor="orchestrator",
+                )
+            except Exception as e:
+                logger.log_error(
+                    f"Gmail Watcher initialization error: {e}",
+                    actor="orchestrator",
+                )
+        else:
+            logger.write_to_timeline(
+                "Gmail Watcher disabled (enable in settings)",
+                actor="orchestrator",
+                message_level="INFO",
+            )
+
         # Ensure Runner_Status/ and Dead_Letter/ exist
         (settings.vault_path / "Runner_Status").mkdir(parents=True, exist_ok=True)
         (settings.vault_path / "Dead_Letter").mkdir(parents=True, exist_ok=True)
@@ -153,6 +192,7 @@ class Orchestrator:
             "Orchestrator starting", actor="orchestrator", message_level="INFO"
         )
 
+        # Start Filesystem Watcher
         if self.filesystem_watcher:
             t = threading.Thread(target=self.filesystem_watcher.run, daemon=True)
             t.start()
@@ -160,6 +200,21 @@ class Orchestrator:
                 "Filesystem Watcher started", actor="orchestrator", message_level="INFO"
             )
 
+        # Start Gmail Watcher in background thread
+        if self.gmail_watcher and self.gmail_watcher.service:
+            self.gmail_watcher_thread = threading.Thread(
+                target=self.gmail_watcher.run,
+                daemon=True,
+                name="GmailWatcher"
+            )
+            self.gmail_watcher_thread.start()
+            logger.write_to_timeline(
+                "Gmail Watcher started (background thread)",
+                actor="orchestrator",
+                message_level="INFO",
+            )
+
+        # Start folder watchers
         for name, watcher in self.watchers.items():
             watcher.start()
             self.observer_threads.append(watcher.observer)
@@ -467,7 +522,7 @@ class Orchestrator:
 
                 # FIX: use pop() not del — on_processing_change() may have
                 # already removed this key when the file move was detected
-                self.file_move_times.pop(file_path_str, None)
+                self.file_move_times.pop(_str, None)
                 
 
     def _move_back_to_needs_action(self, file_path: Path):

@@ -73,6 +73,37 @@ class Settings(BaseSettings):
         description="Enable Filesystem Watcher (watches Drop/ folder)"
     )
 
+    enable_gmail_watcher: bool = Field(
+        default=False,
+        description="Enable Gmail Watcher (watches Gmail for new messages)"
+    )
+
+    # Gmail Watcher Settings
+    gmail_watcher_check_interval: int = Field(
+        default=120,
+        ge=60,
+        le=600,
+        description="Gmail watcher check interval in seconds (default: 120)"
+    )
+
+    gmail_watcher_query: str = Field(
+        default="is:unread is:important",
+        description="Gmail search query for filtering messages"
+    )
+
+    gmail_credentials_path: Optional[Path] = Field(
+        default=None,
+        description="Path to Gmail API credentials JSON file"
+    )
+
+    @field_validator("gmail_credentials_path", mode="before")
+    @classmethod
+    def validate_gmail_credentials_path(cls, v):
+        """Convert string to Path if provided."""
+        if isinstance(v, str):
+            return Path(v)
+        return v
+
     # ========================================================================
     # Security Settings
     # ========================================================================
