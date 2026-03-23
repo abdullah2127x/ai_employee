@@ -1,75 +1,37 @@
-# Dashboard
-
-**Last Updated:** {{date}}
-**System Status:** 🟢 Operational
+# AI Employee Dashboard
+*Last updated: 2026-03-23 18:18:20*
 
 ---
 
-## 📊 Queue Status
+## Status
 
-| Queue | Count | Oldest Item |
-|-------|-------|-------------|
-| Needs_Action | {{count_needs_action}} | {{oldest_needs_action}} |
-| Processing | {{count_processing}} | {{oldest_processing}} |
-| Pending_Approval | {{count_pending_approval}} | {{oldest_pending_approval}} |
-| Needs_Revision | {{count_needs_revision}} | {{oldest_needs_revision}} |
-
----
-
-## 💰 Financial Overview
-
-### Bank Balance
-- **Current Balance:** $0.00
-- **Pending Transactions:** 0
-- **This Month:** $0.00
-- **Revenue (MTD):** $0.00 / $10,000 (0%)
+| Queue | Count |
+|-------|-------|
+| Pending (Needs Action + Processing) | 0 |
+| Awaiting approval | 0 |
+| Completed (all time) | 3 |
+| Failed / needs attention | 0 |
 
 ---
 
-## 📬 Pending Messages
+## Approval queue
 
-- **Unread Emails:** 0
-- **Unread WhatsApp:** 0
-- **Urgent Items:** 0
+*No items awaiting approval.*
 
 ---
 
-## 🚀 Active Business Projects
+## Recent completions
 
-| Project | Status | Due Date | Budget |
-|---------|--------|----------|--------|
-| No active projects | - | - | - |
-
----
-
-## 📈 Today's Activity
-
-### Metrics
-- ✅ **Tasks Completed:** 0
-- ⏳ **Pending Approval:** 0
-- ❌ **Failures:** 0
-- ⚡ **Avg Execution Time:** 0s
-
-### Recent Actions
-- No recent activity
+- 2026-03-23 18:18:20 · [[Done/RESULT_file_drop_20260323_181721_greeting3.md]] — **greeting3.txt** · ✅ Completed · document
+- 2026-03-23 18:18:14 · [[Done/RESULT_file_drop_20260323_181714_greeting1.md]] — **greeting1.txt** · ✅ Completed · document
+- 2026-03-23 18:18:12 · [[Done/RESULT_file_drop_20260323_181717_greeting2.md]] — **greeting2.txt** · ✅ Completed · document
 
 ---
 
-## 🎯 Weekly Goals Progress
+## Needs attention
 
-| Goal | Target | Current | Progress |
-|------|--------|---------|----------|
-| Client Response Time | < 24 hours | - | ✅ |
-| Invoice Payment Rate | > 90% | - | ✅ |
-| Software Costs | < $500/month | - | ✅ |
+*Nothing needs attention.*
 
 ---
 
-## 🔔 Alerts & Notifications
-
-- No active alerts
-
----
-
-*This dashboard is automatically updated by your AI Employee.*
-*Next auto-refresh: {{next_refresh}}*
+*AI Employee · Auto-generated · 2026-03-23 18:18:20*

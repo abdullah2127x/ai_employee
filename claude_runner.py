@@ -1,114 +1,152 @@
 #!/usr/bin/env python3
 """
-claude_runner.py - Standalone Claude Code executor for AI Employee
+claude_runner.py - Improved Claude Code executor for AI Employee (v2.1)
 
-Reads task file, invokes Claude Code with system prompt, parses JSON output,
-and moves files based on Claude's decision.
+Reads a task file from Processing/, sends a SHORT prompt to Claude Code,
+validates the JSON response, builds the output file, and moves files
+based on Claude's decision.
+
+New in v2.1:
+- Status file protocol: writes Runner_Status/<task_id>.json when done
+  so the orchestrator knows the exact outcome without guessing
+- Fixed: "Processing_Arcchive" typo → "Processing_Archive"
 
 Usage:
-    python claude_runner.py Processing/FILE_20260319_103000_invoice.pdf.md
-
-Claude Output Format (JSON):
-    {"decision": "create_approval_request", "type": "payment", ...}
-    {"decision": "complete_task"}
-    {"decision": "needs_revision", "reason": "..."}
-    {"decision": "error", "message": "..."}
-
-File Movement:
-    - complete_task → Processing/ → Done/
-    - create_approval_request → Processing/ → Pending_Approval/
-    - needs_revision → Processing/ → Needs_Revision/
+    python claude_runner.py Processing/file_drop_20260322_greeting2.md
 """
 
-import os
-import sys
 import json
-import subprocess
+import re
 import shutil
-from pathlib import Path
+import subprocess
+import sys
 from datetime import datetime
+from pathlib import Path
 
-# Add project root to path
 project_root = Path(__file__).parent.resolve()
 sys.path.insert(0, str(project_root))
 
 from core.config import settings
 from utils.logging_manager import LoggingManager
-from utils.task_template import fill_ai_placeholders, validate_no_pending_placeholders, get_pending_count
+from utils.task_template import build_output_file, read_frontmatter
 
 logger = LoggingManager()
 
+# ============================================================================
+# VALID VALUES — must match CLAUDE.md exactly
+# ============================================================================
 
-def load_system_prompt() -> str:
-    """Load system prompt from vault/CLAUDE.md"""
-    claude_md = settings.vault_path / "CLAUDE.md"
-    if claude_md.exists():
-        return claude_md.read_text(encoding="utf-8")
-    else:
-        logger.log_warning("CLAUDE.md not found, using default prompt", actor="claude_runner")
-        return """
-You are an AI Employee assistant. Process the task and output your decision as JSON.
+VALID_DECISIONS = {"complete_task", "create_approval_request", "needs_revision"}
+VALID_CATEGORIES = {"general", "invoice", "payment", "email", "document", "urgent"}
 
-Decision types:
-- complete_task: Task is done, move to Done/
-- create_approval_request: Need human approval, move to Pending_Approval/
-- needs_revision: Task needs rework, move to Needs_Revision/
-- error: Something went wrong
-
-Output ONLY the JSON, no other text.
-""".strip()
+# ============================================================================
+# STATUS FILE PROTOCOL
+# ============================================================================
 
 
-def load_context_files() -> dict:
-    """Load context files (Business_Goals.md, Company_Handbook.md)"""
-    context = {}
-
-    business_goals = settings.vault_path / "Business_Goals.md"
-    if business_goals.exists():
-        context["business_goals"] = business_goals.read_text(encoding="utf-8")
-
-    company_handbook = settings.vault_path / "Company_Handbook.md"
-    if company_handbook.exists():
-        context["company_handbook"] = company_handbook.read_text(encoding="utf-8")
-
-    return context
-
-
-# getting the prompt string that contains the Business Goals and Company Handbook content and invoke the claude code with the prompt
-def invoke_claude(prompt: str, timeout: int = 300) -> subprocess.CompletedProcess:
+def write_status(task_id: str, outcome: str, detail: str = ""):
     """
-    Invoke Claude Code with prompt.
+    Write a status file to Runner_Status/ so the orchestrator knows
+    the exact outcome of this runner process.
+
+    Called at the END of process_task() regardless of success or failure.
+
+    outcome values:
+        "done"             — task completed, output in Done/
+        "pending_approval" — output in Pending_Approval/
+        "needs_revision"   — output in Needs_Revision/
+        "runner_error"     — runner crashed before finishing
 
     Args:
-        prompt: The prompt to send to Claude
-        timeout: Timeout in seconds (default: 300)
-
-    Returns:
-        subprocess.CompletedProcess with stdout containing Claude's response
+        task_id: Task identifier
+        outcome: One of the four values above
+        detail:  Optional error message or extra info
     """
-    # Build command for Claude Code
-    # Escape quotes in prompt
-    # escaped_prompt = "Hi"
-    escaped_prompt = prompt.replace('"', '\\"').replace("\n", "\\n")
-    cmd = f'ccr code -p "{escaped_prompt}"'
+    status_folder = settings.vault_path / "Runner_Status"
+    status_folder.mkdir(parents=True, exist_ok=True)
 
-    # LOG THE EXACT COMMAND FOR DEBUGGING
-    logger.write_to_timeline("="*70)
-    logger.write_to_timeline("🔵 CLAUDE CODE COMMAND")
-    logger.write_to_timeline("="*70)
-    logger.write_to_timeline(f"Command: {cmd}")
-    logger.write_to_timeline(f"Timeout: {timeout}s")
-    logger.write_to_timeline(f"Prompt length: {len(prompt)} chars")
-    logger.write_to_timeline(f"Prompt (first 300 chars): {prompt[:300]}...")
-    logger.write_to_timeline("="*70)
-    logger.write_to_timeline("🔄 Running subprocess.run()...")
-    logger.write_to_timeline(f"   shell=True (required for .cmd on Windows)")
-    logger.write_to_timeline(f"   capture_output={True}")
-    logger.write_to_timeline(f"   text={True}")
-    logger.write_to_timeline(f"   cwd={settings.vault_path}")
-    logger.write_to_timeline("="*70)
+    status = {
+        "task_id": task_id,
+        "outcome": outcome,
+        "timestamp": datetime.now().isoformat(),
+        "detail": detail,
+    }
 
-    logger.write_to_timeline(f"Invoking Claude Code", actor="claude_runner", message_level="INFO")
+    status_path = status_folder / f"{task_id}.json"
+    try:
+        status_path.write_text(json.dumps(status, indent=2), encoding="utf-8")
+        logger.write_to_timeline(
+            f"Status written: {outcome} → Runner_Status/{task_id}.json",
+            actor="claude_runner",
+        )
+    except Exception as e:
+        logger.log_error(f"Failed to write status file: {e}", error=e, actor="claude_runner")
+
+
+# ============================================================================
+# PROMPT BUILDER
+# ============================================================================
+
+SKILL_MAP = {
+    "file_drop": ".claude/skills/process-file-drop/SKILL.md",
+    "email": ".claude/skills/process-email/SKILL.md",
+    "whatsapp": ".claude/skills/process-whatsapp/SKILL.md",
+}
+
+
+def build_prompt(task_file: Path, task_content: str, task_type: str) -> str:
+    """
+    Build the short prompt sent to Claude Code.
+
+    CLAUDE.md is auto-loaded by Claude Code (cwd=vault/).
+    Skills are loaded by Claude per CLAUDE.md routing rules.
+    """
+    skill_path = SKILL_MAP.get(task_type, ".claude/skills/process-general/SKILL.md")
+
+    return f"""Process this task using the skill at: {skill_path}
+
+Task file: {task_file.name}
+
+--- TASK CONTENT START ---
+{task_content}
+--- TASK CONTENT END ---
+
+Return ONLY the JSON decision as defined in CLAUDE.md. No other text."""
+
+
+# ============================================================================
+# CLAUDE INVOCATION
+# ============================================================================
+
+
+def invoke_claude(prompt: str, timeout: int = 300) -> subprocess.CompletedProcess:
+    """
+    Invoke Claude Code with a prompt.
+    Runs from vault/ so CLAUDE.md is auto-loaded.
+
+    Uses shell=True so that ccr/claude is found on PATH exactly as it is
+    in the terminal. Writes prompt to a temp file and reads it with
+    PowerShell Get-Content (Windows-compatible, no bash required).
+    """
+    # Write prompt to temp file
+    prompt_file = settings.vault_path / ".claude" / "_runner_prompt.tmp"
+    prompt_file.parent.mkdir(parents=True, exist_ok=True)
+    prompt_file.write_text(prompt, encoding="utf-8")
+
+    # Full absolute path to prompt file, forward slashes for PowerShell
+    prompt_file_abs = str(prompt_file.resolve()).replace("\\", "/")
+
+    # Get the command from settings (e.g. "ccr code" or "claude")
+    claude_cmd = getattr(settings, "claude_command", "claude")
+
+    # PowerShell reads the file and passes content as the -p argument
+    # Works on Windows regardless of bash availability
+    cmd = f"powershell -Command \"{claude_cmd} -p (Get-Content -Raw '{prompt_file_abs}')\""
+
+    logger.write_to_timeline(
+        f"Invoking Claude | prompt length: {len(prompt)} chars",
+        actor="claude_runner",
+    )
 
     try:
         result = subprocess.run(
@@ -117,103 +155,110 @@ def invoke_claude(prompt: str, timeout: int = 300) -> subprocess.CompletedProces
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd=str(settings.vault_path),
+            cwd=str(settings.vault_path),  # vault/ so CLAUDE.md auto-loads
         )
 
-        logger.write_to_timeline("✅ subprocess.run() completed")
-        logger.write_to_timeline(f"   Return code: {result.returncode}")
-        logger.write_to_timeline(f"   Stdout length: {len(result.stdout) if result.stdout else 0} chars")
-        logger.write_to_timeline(f"   Stderr length: {len(result.stderr) if result.stderr else 0} chars")
+        logger.write_to_timeline(
+            f"Claude finished | returncode={result.returncode} "
+            f"| stdout={len(result.stdout or '')} chars",
+            actor="claude_runner",
+        )
 
-        if result.stdout:
-            logger.write_to_timeline(f"   Stdout (first 500 chars):\n{result.stdout[:500]}")
         if result.stderr:
-            logger.write_to_timeline(f"   Stderr (first 500 chars):\n{result.stderr[:500]}")
+            logger.write_to_timeline(
+                f"Claude stderr: {result.stderr[:300]}",
+                actor="claude_runner",
+            )
 
         return result
 
     except subprocess.TimeoutExpired:
-        logger.log_error(f"Claude Code timed out after {timeout} seconds", actor="claude_runner")
-        result = subprocess.CompletedProcess(cmd, returncode=-1, stdout="", stderr="Timeout")
-        return result
+        logger.log_error(f"Claude timed out after {timeout}s", actor="claude_runner")
+        return subprocess.CompletedProcess(cmd, returncode=-1, stdout="", stderr="Timeout")
 
     except Exception as e:
-        logger.log_error(f"Error invoking Claude Code: {e}", error=e, actor="claude_runner")
-        result = subprocess.CompletedProcess(cmd, returncode=-2, stdout="", stderr=str(e))
-        return result
+        logger.log_error(f"Claude invocation error: {e}", error=e, actor="claude_runner")
+        return subprocess.CompletedProcess(cmd, returncode=-2, stdout="", stderr=str(e))
+
+    finally:
+        try:
+            prompt_file.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
-def parse_and_validate_json(stdout: str) -> dict:
+# ============================================================================
+# JSON PARSING & VALIDATION
+# ============================================================================
+
+
+def parse_and_validate(stdout: str) -> dict:
     """
-    Parse and validate Claude's JSON output.
-    
-    Args:
-        stdout: Claude's JSON output (strict JSON only)
-    
-    Returns:
-        dict with validated fields
-    
+    Extract and validate Claude's JSON from stdout.
+
+    Strips accidental markdown fences defensively.
+
     Raises:
-        ValueError: If JSON is invalid or missing required fields
+        ValueError with a clear message if anything is wrong.
     """
-    # Try to find JSON in output
-    try:
-        # Look for JSON block
-        start = stdout.find("{")
-        end = stdout.rfind("}") + 1
+    if not stdout or not stdout.strip():
+        raise ValueError("Claude returned empty output")
 
-        if start >= 0 and end > start:
-            json_str = stdout[start:end]
-        else:
-            raise ValueError("No JSON found in output")
-        
+    text = stdout.strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    text = text.strip()
+
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start < 0 or end <= start:
+        raise ValueError(f"No JSON object found in Claude output. Got: {text[:200]}")
+
+    json_str = text[start:end]
+
+    try:
         decision = json.loads(json_str)
-        
-        # Validate required fields
-        required_fields = ['decision', 'category', 'ai_action_taken', 'ai_response']
-        for field in required_fields:
-            if field not in decision:
-                raise ValueError(f"Missing required field: {field}")
-        
-        # Validate field values
-        valid_decisions = ['complete_task', 'create_approval_request', 'needs_revision']
-        if decision['decision'] not in valid_decisions:
-            raise ValueError(f"Invalid decision: {decision['decision']}. Must be one of {valid_decisions}")
-        
-        valid_categories = ['general', 'important', 'urgent', 'invoice', 'payment']
-        if decision['category'] not in valid_categories:
-            raise ValueError(f"Invalid category: {decision['category']}. Must be one of {valid_categories}")
-        
-        return decision
-        
     except json.JSONDecodeError as e:
-        raise ValueError(f"Claude did not return valid JSON: {e}")
+        raise ValueError(f"Claude returned invalid JSON: {e}. Raw: {json_str[:300]}")
+
+    required = ["decision", "category", "summary", "action_taken", "response", "approval_reason"]
+    missing = [f for f in required if f not in decision]
+    if missing:
+        raise ValueError(f"Missing required fields: {missing}")
+
+    if decision["decision"] not in VALID_DECISIONS:
+        raise ValueError(
+            f"Invalid decision '{decision['decision']}'. Must be one of: {VALID_DECISIONS}"
+        )
+
+    if decision["category"] not in VALID_CATEGORIES:
+        raise ValueError(
+            f"Invalid category '{decision['category']}'. Must be one of: {VALID_CATEGORIES}"
+        )
+
+    # Normalize approval_reason
+    if decision["decision"] == "create_approval_request":
+        if not decision.get("approval_reason"):
+            raise ValueError(
+                "approval_reason must be non-empty when decision is create_approval_request"
+            )
+    else:
+        if decision.get("approval_reason") in (None, "null", ""):
+            decision["approval_reason"] = None
+
+    return decision
 
 
-def parse_claude_output(stdout: str) -> dict:
-    """
-    DEPRECATED: Use parse_and_validate_json() instead.
-    
-    Parse Claude's JSON output (legacy, no validation).
-    """
-    try:
-        return parse_and_validate_json(stdout)
-    except ValueError:
-        return {"decision": "complete_task"}
+# ============================================================================
+# FILE MOVEMENT
+# ============================================================================
 
 
-def move_file(src: Path, dest_folder: Path, reason: str = ""):
-    """
-    Move file to destination folder.
-
-    Args:
-        src: Source file path
-        dest_folder: Destination folder
-        reason: Reason for move (for logging)
-    """
+def move_file(src: Path, dest_folder: Path, reason: str = "") -> Path | None:
+    """Move src to dest_folder. Returns new path or None on failure."""
     if not src.exists():
-        logger.log_warning(f"Source file does not exist: {src}", actor="claude_runner")
-        return
+        logger.log_warning(f"Cannot move — file missing: {src}", actor="claude_runner")
+        return None
 
     dest_folder.mkdir(parents=True, exist_ok=True)
     dest = dest_folder / src.name
@@ -221,276 +266,212 @@ def move_file(src: Path, dest_folder: Path, reason: str = ""):
     try:
         shutil.move(str(src), str(dest))
         logger.write_to_timeline(
-            f"Moved {src.name} to {dest_folder.name}/ - {reason}",
+            f"Moved {src.name} → {dest_folder.name}/ ({reason})",
             actor="claude_runner",
-            message_level="INFO",
         )
+        return dest
     except Exception as e:
-        logger.log_error(f"Failed to move file: {e}", error=e, actor="claude_runner")
+        logger.log_error(f"Failed to move {src.name}: {e}", error=e, actor="claude_runner")
+        return None
 
 
-def add_response_to_file(task_file: Path, response: str, category: str, action_taken: str):
+# ============================================================================
+# OUTPUT FILE CREATION
+# ============================================================================
+
+
+def create_and_move_output_file(
+    task_file: Path,
+    task_content: str,
+    decision: dict,
+    processed_at: datetime,
+) -> tuple[Path | None, str]:
     """
-    Add Claude's response to the task file's Processing Notes section.
+    Build output markdown and write it to the correct destination folder.
 
-    Args:
-        task_file: Path to task markdown file
-        response: Claude's response text
-        category: Category assigned by Claude
-        action_taken: Action taken by Claude
+    Returns:
+        (output_path_or_None, outcome_string)
+        outcome_string is one of: "done", "pending_approval", "needs_revision"
     """
-    try:
-        # Read current file content
-        content = task_file.read_text(encoding='utf-8')
-        
-        # Find and replace the Processing Notes section
-        old_section = "## Processing Notes\n\n(Add notes here during processing)\n"
-        new_section = f"""## Processing Notes
+    meta = read_frontmatter(task_content)
+    task_id = meta.get("task_id", task_file.stem)
+    task_type = meta.get("type", "unknown")
+    file_name = meta.get("original_name") or meta.get("subject") or task_file.stem
+    orig_path = meta.get("original_path", "")
 
-**Category:** {category.title()}
-**Action Taken:** {action_taken}
-**AI Response:** {response}
-
----
-
-## AI Processing Summary
-
-- **Processed by:** Claude Code
-- **Category:** {category.title()}
-- **Response:** {response}
-- **Action:** {action_taken}
-
-"""
-        
-        if old_section in content:
-            content = content.replace(old_section, new_section)
-        else:
-            # If section not found, append before the footer
-            footer = "\n---\n\n*Generated by AI Employee Filesystem Watcher*"
-            if footer in content:
-                content = content.replace(footer, f"\n{new_section}{footer}")
-            else:
-                # Just append at the end
-                content += f"\n{new_section}"
-        
-        # Write updated content
-        task_file.write_text(content, encoding='utf-8')
-        
-        logger.write_to_timeline(
-            f"Added response to file: {response[:50]}...",
-            actor="claude_runner",
-            message_level="INFO",
-        )
-        
-    except Exception as e:
-        logger.log_error(
-            f"Failed to add response to file: {e}",
-            error=e,
-            actor="claude_runner"
-        )
-
-
-def process_task(task_file: Path):
-    """
-    Process a single task file.
-
-    Args:
-        task_file: Path to task file in Processing/
-    """
-    logger.write_to_timeline("="*70)
-    logger.write_to_timeline("🔵 CLAUDE RUNNER: PROCESS TASK")
-    logger.write_to_timeline("="*70)
-    logger.write_to_timeline(f"Task file: {task_file}")
-    logger.write_to_timeline(f"Task file exists: {task_file.exists()}")
-    logger.write_to_timeline(f"Task file absolute path: {task_file.absolute()}")
-    logger.write_to_timeline("="*70)
-    
-    logger.write_to_timeline(
-        f"Processing task: {task_file.name}", actor="claude_runner", message_level="INFO"
+    output_md = build_output_file(
+        task_id=task_id,
+        task_type=task_type,
+        original_name=file_name,
+        original_path_obsidian=orig_path,
+        decision=decision,
+        processed_at=processed_at,
     )
 
-    # Read task file
+    dest_map = {
+        "complete_task": (settings.vault_path / "Done", "done"),
+        "create_approval_request": (settings.vault_path / "Pending_Approval", "pending_approval"),
+        # needs_revision handled separately in process_task()
+    }
+    dest_folder, outcome = dest_map.get(
+        decision["decision"],
+        (settings.vault_path / "Done", "done"),
+    )
+    dest_folder.mkdir(parents=True, exist_ok=True)
+
+    output_filename = f"RESULT_{task_id}.md"
+    output_path = dest_folder / output_filename
+
+    try:
+        output_path.write_text(output_md, encoding="utf-8")
+        logger.write_to_timeline(
+            f"Output file created: {output_filename} → {dest_folder.name}/",
+            actor="claude_runner",
+        )
+        return output_path, outcome
+    except Exception as e:
+        logger.log_error(f"Failed to write output file: {e}", error=e, actor="claude_runner")
+        return None, "runner_error"
+
+
+# ============================================================================
+# MAIN TASK PROCESSOR
+# ============================================================================
+
+
+def process_task(task_file: Path) -> bool:
+    """
+    Process a single task file. Returns True on success, False on failure.
+
+    FIX: needs_revision now moves the ORIGINAL task file to Needs_Revision/
+    instead of writing a RESULT_ file there. This ensures:
+    - Orchestrator retries Claude on the same input it failed on
+    - retry_count in the original task frontmatter increments correctly
+    - The retry loop terminates properly at MAX_RETRIES → Dead_Letter/
+    """
+    logger.write_to_timeline(f"Processing: {task_file.name}", actor="claude_runner")
+
+    task_id = task_file.stem
+
+    # ── Step 1: Read task file ──────────────────────────────────────────────
     try:
         task_content = task_file.read_text(encoding="utf-8")
     except Exception as e:
-        logger.log_error(f"Could not read task file: {e}", error=e, actor="claude_runner")
-        move_file(task_file, settings.vault_path / "Needs_Revision", "Could not read file")
-        return
+        logger.log_error(f"Cannot read task file: {e}", error=e, actor="claude_runner")
+        move_file(
+            task_file,
+            settings.vault_path / "Needs_Revision",
+            "Could not read file",
+        )
+        write_status(task_id, "runner_error", f"Could not read task file: {e}")
+        return False
 
-    # Load system prompt and context
-    system_prompt = load_system_prompt()
-    context = load_context_files()
+    meta = read_frontmatter(task_content)
+    task_type = meta.get("type", "unknown")
+    task_id = meta.get("task_id", task_file.stem)
 
-    # Build STRICT JSON-ONLY prompt
-    prompt = f"""You are an AI Employee WORKER. Process the task and return ONLY JSON.
+    # ── Step 2: Build prompt ────────────────────────────────────────────────
+    prompt = build_prompt(task_file, task_content, task_type)
 
-CRITICAL RULES:
-1. Output ONLY JSON - no markdown, no text before or after
-2. Do not include any explanations
-3. Do not use code blocks or formatting
-4. Just raw JSON
+    # ── Step 3: Invoke Claude ───────────────────────────────────────────────
+    result = invoke_claude(prompt)
 
-Task file: {task_file.name}
-
-Task content:
-{task_content}
-
-Output ONLY this JSON format (no other text):
-{{
-  "decision": "complete_task" | "create_approval_request" | "needs_revision",
-  "category": "general" | "important" | "urgent" | "invoice" | "payment",
-  "ai_action_taken": "What you did",
-  "ai_response": "Your full response text"
-}}
-
-Examples:
-Input: "Hey I am abdullah"
-Output: {{"decision": "complete_task", "category": "general", "ai_action_taken": "Added greeting response", "ai_response": "Hello! Nice to meet you."}}
-
-Input: "Please categorize this as important"
-Output: {{"decision": "complete_task", "category": "important", "ai_action_taken": "Categorized as important", "ai_response": "This has been marked as important per your request."}}
-
-Output ONLY the JSON."""
-
-    # Invoke Claude
-    result = invoke_claude(prompt, timeout=300)
-
-    # Check result
     if result.returncode != 0:
-        logger.log_error(f"Claude Code failed: {result.stderr[:200]}", actor="claude_runner")
-        move_file(task_file, settings.vault_path / "Needs_Revision", "Claude failed")
-        return
+        msg = f"Claude exited {result.returncode}: {result.stderr[:200]}"
+        logger.log_error(msg, actor="claude_runner")
+        move_file(
+            task_file,
+            settings.vault_path / "Needs_Revision",
+            "Claude invocation failed",
+        )
+        write_status(task_id, "runner_error", msg)
+        return False
 
-    # Parse and VALIDATE JSON
+    # ── Step 4: Parse and validate JSON ─────────────────────────────────────
     try:
-        decision = parse_and_validate_json(result.stdout)
+        decision = parse_and_validate(result.stdout)
     except ValueError as e:
-        logger.log_error(f"Invalid JSON from Claude: {e}", actor="claude_runner")
-        move_file(task_file, settings.vault_path / "Needs_Revision", f"Invalid JSON: {e}")
-        return
+        logger.log_error(f"JSON validation failed: {e}", actor="claude_runner")
+        move_file(
+            task_file,
+            settings.vault_path / "Needs_Revision",
+            f"Bad JSON: {e}",
+        )
+        write_status(task_id, "runner_error", f"JSON validation failed: {e}")
+        return False
 
     logger.write_to_timeline(
-        f"Claude decision: {decision.get('decision', 'unknown')}",
+        f"Decision: {decision['decision']} | Category: {decision['category']}",
         actor="claude_runner",
-        message_level="INFO",
     )
 
-    # Fill template with Claude's JSON data
-    try:
-        content = task_file.read_text(encoding='utf-8')
-        updated_content = fill_ai_placeholders(content, decision)
-        
-        # Validate all [PENDING] placeholders replaced
-        if not validate_no_pending_placeholders(updated_content):
-            count = get_pending_count(updated_content)
-            logger.log_error(f"{count} placeholders not filled!", actor="claude_runner")
-            move_file(task_file, settings.vault_path / "Needs_Revision", f"{count} placeholders not filled")
-            return
-        
-        # Write updated content
-        task_file.write_text(updated_content, encoding='utf-8')
-        
+    processed_at = datetime.now()
+
+    # ── Step 5: Handle needs_revision separately ─────────────────────────────
+    # FIX: Do NOT write a RESULT_ file to Needs_Revision/.
+    # Move the ORIGINAL task file there so the orchestrator retries
+    # Claude on the same input. The retry_count in the task file's
+    # frontmatter increments correctly each time through the loop.
+    if decision["decision"] == "needs_revision":
+        reason = decision.get("response", "Claude returned needs_revision")
         logger.write_to_timeline(
-            f"Template filled successfully",
+            f"Needs revision: {reason[:100]}",
             actor="claude_runner",
-            message_level="INFO",
         )
-        
-    except Exception as e:
-        logger.log_error(f"Failed to fill template: {e}", error=e, actor="claude_runner")
-        move_file(task_file, settings.vault_path / "Needs_Revision", f"Template error: {e}")
-        return
-
-    # Execute decision
-    decision_type = decision.get("decision", "complete_task")
-
-    if decision_type == "complete_task":
-        # Move to Done/
-        move_file(task_file, settings.vault_path / "Done", "Task completed")
-
-    elif decision_type == "create_approval_request":
-        # Create approval file in Pending_Approval/
-        approval_content = f"""---
-type: approval_request
-action: {decision.get('type', 'unknown')}
-created: {datetime.now().isoformat()}
-status: pending
----
-
-# Approval Required
-
-**Action:** {decision.get('type', 'unknown')}
-
-## Details
-
-{json.dumps(decision, indent=2)}
-
-## To Approve
-Move this file to `/Approved/` folder
-
-## To Reject
-Move this file to `/Rejected/` folder
-
-## To Request Changes
-Move this file to `/Needs_Revision/` folder with comments
-"""
-
-        approval_file = settings.vault_path / "Pending_Approval" / f"APPROVAL_{task_file.stem}.md"
-        approval_file.parent.mkdir(parents=True, exist_ok=True)
-        approval_file.write_text(approval_content, encoding="utf-8")
-
-        # Move task file to Pending_Approval/ as well
-        move_file(task_file, settings.vault_path / "Pending_Approval", "Approval requested")
-
-        logger.write_to_timeline(
-            f"Created approval request: {approval_file.name}",
-            actor="claude_runner",
-            message_level="INFO",
+        move_file(
+            task_file,
+            settings.vault_path / "Needs_Revision",
+            f"Needs revision: {reason[:80]}",
         )
+        write_status(task_id, "needs_revision", reason[:200])
+        return False
 
-    elif decision_type == "needs_revision":
-        reason = decision.get("reason", "Needs revision")
-        move_file(task_file, settings.vault_path / "Needs_Revision", f"Needs revision: {reason}")
+    # ── Step 6: Build output file (done / pending_approval only) ────────────
+    output_path, outcome = create_and_move_output_file(
+        task_file, task_content, decision, processed_at
+    )
+    if output_path is None:
+        move_file(
+            task_file,
+            settings.vault_path / "Needs_Revision",
+            "Output file creation failed",
+        )
+        write_status(task_id, "runner_error", "Output file creation failed")
+        return False
 
-    elif decision_type == "error":
-        message = decision.get("message", "Unknown error")
-        logger.log_error(f"Claude reported error: {message}", actor="claude_runner")
-        move_file(task_file, settings.vault_path / "Needs_Revision", f"Error: {message}")
+    # ── Step 7: Archive original task file ──────────────────────────────────
+    archive_folder = settings.vault_path / "Processing_Archive"
+    move_file(task_file, archive_folder, "Task processed — archived")
 
-    else:
-        logger.log_warning(f"Unknown decision type: {decision_type}", actor="claude_runner")
-        move_file(task_file, settings.vault_path / "Done", f"Unknown decision: {decision_type}")
+    # ── Step 8: Write status for orchestrator ───────────────────────────────
+    write_status(task_id, outcome)
+
+    logger.write_to_timeline(
+        f"Done: {task_file.name} → {output_path.parent.name}/{output_path.name}",
+        actor="claude_runner",
+    )
+    return True
+
+
+# ============================================================================
+# ENTRY POINT
+# ============================================================================
 
 
 def main():
-    """Main entry point."""
     if len(sys.argv) < 2:
         print("Usage: python claude_runner.py <task_file>")
-        print("Example: python claude_runner.py Processing/FILE_20260319_103000_invoice.pdf.md")
+        print("Example: python claude_runner.py Processing/file_drop_20260322_greeting2.md")
         sys.exit(1)
 
     task_file = Path(sys.argv[1])
 
     if not task_file.exists():
-        logger.log_error(f"Task file does not exist: {task_file}", actor="claude_runner")
+        logger.log_error(f"Task file not found: {task_file}", actor="claude_runner")
         sys.exit(1)
 
-    logger.write_to_timeline(
-        f"Claude Runner started for: {task_file.name}", actor="claude_runner", message_level="INFO"
-    )
-
-    try:
-        process_task(task_file)
-        logger.write_to_timeline(
-            f"Claude Runner completed: {task_file.name}",
-            actor="claude_runner",
-            message_level="INFO",
-        )
-    except Exception as e:
-        logger.log_error(f"Error processing task: {e}", error=e, actor="claude_runner")
-        # Move to Needs_Revision on error
-        move_file(task_file, settings.vault_path / "Needs_Revision", f"Error: {e}")
-        sys.exit(1)
+    success = process_task(task_file)
+    sys.exit(0 if success else 1)
 
 
 if __name__ == "__main__":

@@ -1,507 +1,466 @@
 #!/usr/bin/env python3
 """
-orchestrator.py - AI Employee Orchestrator (Version 2.0)
+orchestrator.py - AI Employee Orchestrator (v2.1)
 
-Manages workflow with Folder Watchers, timeout tracking, and Claude Runner integration.
-Also manages Filesystem Watcher (Drop/ folder monitoring) based on configuration.
-No database dependency - pure file-based tracking.
+New in v2.1:
+- Runner_Status/ watcher: orchestrator now sees EXACTLY what claude_runner
+  produced (done / pending_approval / needs_revision / runner_error).
+  No more blind spot — full visibility without changing the subprocess model.
+- Retry limit: Needs_Revision tasks are re-queued up to MAX_RETRIES times.
+  After that they move to Dead_Letter/ and a warning is logged.
+  retry_count is tracked in the task file's YAML frontmatter.
+- Dead_Letter/ folder: tasks that failed MAX_RETRIES times land here.
 
-Architecture:
-- Filesystem Watcher (watchers/filesystem_watcher.py) - Watches Drop/, creates tasks
-  - Managed by: Orchestrator (starts/stops based on ENABLE_FILESYSTEM_WATCHER flag)
-- Folder Watchers (watchers/folder_watcher.py) - Orchestrator manages all workflow folders
-- Timeout Tracking - file_move_times dictionary tracks files in Processing/
-- Claude Runner (claude_runner.py) - Standalone Claude Code executor
-
-Usage:
-    python orchestrator.py
-    
-Configuration:
-    Set ENABLE_FILESYSTEM_WATCHER=true in .env to enable Drop/ folder monitoring
+Architecture unchanged:
+- FilesystemWatcher (Drop/) → Needs_Action/
+- Orchestrator FolderWatcher → Processing/ → claude_runner subprocess
+- claude_runner writes Runner_Status/<task_id>.json when done
+- Orchestrator FolderWatcher on Runner_Status/ reads outcome
 """
 
 import os
 import sys
 import time
+import json
 import subprocess
 import threading
+import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Dict
 
-# Add project root to path
 project_root = Path(__file__).parent.resolve()
 sys.path.insert(0, str(project_root))
 
 from core.config import settings
 from utils.logging_manager import LoggingManager
+from utils.task_template import increment_retry_count
+from utils.dashboard import write_dashboard
+
 from watchers.folder_watcher import FolderWatcher
 from watchers.filesystem_watcher import FilesystemWatcher
 
 logger = LoggingManager()
 
+# Maximum times a task is retried from Needs_Revision before Dead_Letter
+MAX_RETRIES = 3
+
 
 class Orchestrator:
     """
-    AI Employee Orchestrator - Manages workflow with Folder Watchers.
-    
-    Responsibilities:
-    - Manages Filesystem Watcher (if ENABLE_FILESYSTEM_WATCHER=true)
-    - Manages Folder Watchers for all workflow folders
-    - Tracks files in Processing/ with timeout detection
-    - Calls Claude Runner for task processing
-    - Executes approved actions
-    - Logs all activities
+    AI Employee Orchestrator — manages all workflow folders and subprocesses.
+
+    Folder responsibilities:
+        Needs_Action/    → move to Processing/, call claude_runner
+        Processing/      → timeout tracking only (file left = claude done)
+        Runner_Status/   → read outcome from claude_runner, log, clean up
+        Approved/        → execute approved action (stub → MCP future)
+        Rejected/        → log, archive
+        Needs_Revision/  → re-queue up to MAX_RETRIES, then Dead_Letter/
     """
-    
+
     def __init__(self):
-        """Initialize orchestrator with watchers and timeout tracking."""
-        self.file_move_times: Dict[str, datetime] = {}  # file_path → move_time
-        self.timeout_seconds = 30  # Reduced timeout for testing (30 seconds)
-        # self.timeout_seconds = 300  # 5 minutes
-        
-        # Keep references to observer threads to prevent them from dying
+        self.file_move_times: Dict[str, datetime] = {}
+        self.timeout_seconds = 300  # Set to 300 (5 min) for production
+
         self.observer_threads = []
-        
-        # Filesystem Watcher (managed by Orchestrator)
+
+        # Filesystem Watcher (Drop/ folder)
         self.filesystem_watcher = None
         if settings.enable_filesystem_watcher:
-            logger.write_to_timeline(
-                "Filesystem Watcher enabled (watches Drop/ folder)",
-                actor="orchestrator",
-                message_level="INFO"
-            )
-            # Create Filesystem Watcher (it has its own thread)
             self.filesystem_watcher = FilesystemWatcher()
+            logger.write_to_timeline(
+                "Filesystem Watcher enabled (Drop/ monitored)",
+                actor="orchestrator",
+                message_level="INFO",
+            )
         else:
             logger.write_to_timeline(
-                "Filesystem Watcher disabled (Drop/ folder not monitored)",
+                "Filesystem Watcher disabled",
                 actor="orchestrator",
-                message_level="WARNING"
+                message_level="WARNING",
             )
-        
-        # Folder watchers for each workflow folder
+
+        # Ensure Runner_Status/ and Dead_Letter/ exist
+        (settings.vault_path / "Runner_Status").mkdir(parents=True, exist_ok=True)
+        (settings.vault_path / "Dead_Letter").mkdir(parents=True, exist_ok=True)
+        (settings.vault_path / "Processing_Archive").mkdir(parents=True, exist_ok=True)
+
+        # Folder watchers
         self.watchers = {
-            'needs_action': FolderWatcher(
-                str(settings.needs_action_path),
-                self.on_needs_action_change
+            "needs_action": FolderWatcher(
+                str(settings.needs_action_path), self.on_needs_action_change
             ),
-            'processing': FolderWatcher(
-                str(settings.processing_path),
-                self.on_processing_change
+            "processing": FolderWatcher(str(settings.processing_path), self.on_processing_change),
+            "runner_status": FolderWatcher(
+                str(settings.vault_path / "Runner_Status"), self.on_runner_status_change
             ),
-            'approved': FolderWatcher(
-                str(settings.approved_path),
-                self.on_approved_change
-            ),
-            'rejected': FolderWatcher(
-                str(settings.rejected_path),
-                self.on_rejected_change
-            ),
-            'needs_revision': FolderWatcher(
-                str(settings.needs_revision_path),
-                self.on_revision_change
+            "approved": FolderWatcher(str(settings.approved_path), self.on_approved_change),
+            "rejected": FolderWatcher(str(settings.rejected_path), self.on_rejected_change),
+            "needs_revision": FolderWatcher(
+                str(settings.needs_revision_path), self.on_revision_change
             ),
         }
-        
+
         logger.write_to_timeline(
-            "Orchestrator initialized",
-            actor="orchestrator",
-            message_level="INFO"
+            "Orchestrator initialized", actor="orchestrator", message_level="INFO"
         )
-    
+
+    # ── Lifecycle ─────────────────────────────────────────────────────────
+
     def start(self):
-        """Start all watchers (Filesystem + Folder) and timeout check loop."""
         logger.write_to_timeline(
-            "Orchestrator starting all watchers",
-            actor="orchestrator",
-            message_level="INFO"
+            "Orchestrator starting", actor="orchestrator", message_level="INFO"
         )
-        
-        # Start Filesystem Watcher (if enabled)
+
         if self.filesystem_watcher:
-            # Start in separate thread (non-blocking)
-            watcher_thread = threading.Thread(target=self.filesystem_watcher.run, daemon=True)
-            watcher_thread.start()
+            t = threading.Thread(target=self.filesystem_watcher.run, daemon=True)
+            t.start()
             logger.write_to_timeline(
-                "Filesystem Watcher started (Drop/ folder monitored)",
-                actor="orchestrator",
-                message_level="INFO"
+                "Filesystem Watcher started", actor="orchestrator", message_level="INFO"
             )
-        
-        # Start all folder watchers (they run in background)
+
         for name, watcher in self.watchers.items():
             watcher.start()
-            # Keep reference to observer thread to prevent it from dying
             self.observer_threads.append(watcher.observer)
             logger.write_to_timeline(
-                f"Folder Watcher started: {name} (watching: {watcher.folder_path})",
+                f"Folder Watcher started: {name}",
                 actor="orchestrator",
-                message_level="INFO"
+                message_level="INFO",
             )
-        
+
         logger.write_to_timeline(
-            "All watchers started, beginning timeout check loop",
+            f"All watchers started | active threads: {threading.active_count()}",
             actor="orchestrator",
-            message_level="INFO"
+            message_level="INFO",
         )
-        
-        # Verify all observers are running
-        logger.write_to_timeline(
-            f"Active threads: {threading.active_count()}",
-            actor="orchestrator",
-            message_level="INFO"
-        )
+
         for name, watcher in self.watchers.items():
-            is_alive = watcher.observer.is_alive() if watcher.observer else False
+            alive = watcher.observer.is_alive() if watcher.observer else False
             logger.write_to_timeline(
-                f"Folder Watcher '{name}' observer alive: {is_alive}",
+                f"Watcher '{name}' alive: {alive}",
                 actor="orchestrator",
-                message_level="INFO" if is_alive else "WARNING"
+                message_level="INFO" if alive else "WARNING",
             )
-        
-        # Start timeout check loop (every 60 seconds)
+
+        write_dashboard(settings.vault_path)
+        logger.write_to_timeline(
+            "Dashboard.md initialized",
+            actor="orchestrator",
+            message_level="INFO",
+        )
+
         try:
             while True:
                 time.sleep(60)
                 self.check_timeouts()
         except KeyboardInterrupt:
             logger.write_to_timeline(
-                "Orchestrator received interrupt signal",
-                actor="orchestrator",
-                message_level="INFO"
+                "Interrupt received", actor="orchestrator", message_level="INFO"
             )
             self.stop()
-    
+
     def stop(self):
-        """Stop all watchers (Filesystem + Folder)."""
-        logger.write_to_timeline(
-            "Orchestrator stopping all watchers",
-            actor="orchestrator",
-            message_level="INFO"
-        )
-        
-        # Stop Filesystem Watcher (if running)
         if self.filesystem_watcher:
             self.filesystem_watcher.stop()
-        
-        # Stop all folder watchers
-        for name, watcher in self.watchers.items():
+        for watcher in self.watchers.values():
             watcher.stop()
-    
+        logger.write_to_timeline("Orchestrator stopped", actor="orchestrator", message_level="INFO")
+
+    # ── Folder callbacks ──────────────────────────────────────────────────
+
     def on_needs_action_change(self, event_type: str, file_path: str):
-        """
-        Handle changes in Needs_Action/ folder.
-        
-        Args:
-            event_type: 'created', 'deleted', 'moved'
-            file_path: Full path to file
-        """
-        if event_type != 'created':
+        if event_type != "created":
             return
-        
-        file_path = Path(file_path)
-        
-        # Only process .md files
-        if file_path.suffix != '.md' or file_path.name.startswith('.'):
+
+        path = Path(file_path)
+        if path.suffix != ".md" or path.name.startswith("."):
             return
-        
+
         logger.write_to_timeline(
-            f"New task detected: {file_path.name}",
+            f"New task: {path.name}",
             actor="orchestrator",
-            message_level="INFO"
+            message_level="INFO",
         )
-        
-        # Move to Processing/
-        self.move_to_processing(file_path)
-        
-        # Update file_path to point to Processing/ location
-        file_path = settings.processing_path / file_path.name
 
-        # Record timestamp for timeout tracking
-        self.file_move_times[str(file_path)] = datetime.now()
+        self._move_to_processing(path)
 
-        # Call Claude Runner (fire and forget)
-        self.call_claude_runner(file_path)
-    
+        processing_path = settings.processing_path / path.name
+        self.file_move_times[str(processing_path)] = datetime.now()
+        self._call_claude_runner(processing_path)
+
     def on_processing_change(self, event_type: str, file_path: str):
-        """
-        Handle changes in Processing/ folder.
-        
-        Args:
-            event_type: 'created', 'deleted', 'moved'
-            file_path: Full path to file
-        """
-        if event_type not in ['deleted', 'moved']:
+        """File left Processing/ — Claude runner finished (or timed out)."""
+        if event_type not in ("deleted", "moved"):
             return
-        
-        # File left Processing/ → Claude finished!
+
         if file_path in self.file_move_times:
             del self.file_move_times[file_path]
-            logger.write_to_timeline(
-                f"Task completed: {Path(file_path).name}",
+
+    def on_runner_status_change(self, event_type: str, file_path: str):
+        """
+        Claude runner wrote a status file.
+        Read it, log the outcome, update Dashboard.md, clean up.
+        """
+        if event_type != "created":
+            return
+
+        path = Path(file_path)
+        if path.suffix != ".json" or path.name.startswith("."):
+            return
+
+        try:
+            status = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.log_error(
+                f"Could not read status file {path.name}: {e}",
                 actor="orchestrator",
-                message_level="INFO"
             )
-    
+            return
+
+        task_id = status.get("task_id", "unknown")
+        outcome = status.get("outcome", "unknown")
+        detail = status.get("detail", "")
+
+        level = "INFO" if outcome in ("done", "pending_approval") else "WARNING"
+        msg = f"Runner outcome: {outcome} | task: {task_id}"
+        if detail:
+            msg += f" | {detail}"
+
+        logger.write_to_timeline(msg, actor="orchestrator", message_level=level)
+
+        if outcome == "runner_error":
+            logger.log_error(
+                f"Claude runner reported error for task {task_id}: {detail}",
+                actor="orchestrator",
+            )
+
+        # Clean up status file
+        try:
+            path.unlink()
+        except Exception:
+            pass
+
+        # Update Dashboard.md after every task outcome
+        success = write_dashboard(settings.vault_path)
+        if success:
+            logger.write_to_timeline(
+                "Dashboard.md updated",
+                actor="orchestrator",
+                message_level="INFO",
+            )
+        else:
+            logger.log_warning(
+                "Dashboard.md update failed",
+                actor="orchestrator",
+            )
+
     def on_approved_change(self, event_type: str, file_path: str):
-        """
-        Handle changes in Approved/ folder.
-        
-        Args:
-            event_type: 'created', 'deleted', 'moved'
-            file_path: Full path to file
-        """
-        if event_type != 'created':
+        if event_type != "created":
             return
-        
-        file_path = Path(file_path)
-        
+
+        path = Path(file_path)
         logger.write_to_timeline(
-            f"Approved task detected: {file_path.name}",
+            f"Approved: {path.name}",
             actor="orchestrator",
-            message_level="INFO"
+            message_level="INFO",
         )
-        
-        # Execute approved action
-        self.execute_approved_action(file_path)
-    
+
+        # TODO: parse approval file, call appropriate MCP server
+        # For now: move to Done/ as placeholder
+        self._execute_approved_action(path)
+
     def on_rejected_change(self, event_type: str, file_path: str):
-        """
-        Handle changes in Rejected/ folder.
-        
-        Args:
-            event_type: 'created', 'deleted', 'moved'
-            file_path: Full path to file
-        """
-        if event_type != 'created':
+        if event_type != "created":
             return
-        
-        file_path = Path(file_path)
-        
+
         logger.write_to_timeline(
-            f"Task rejected: {file_path.name}",
+            f"Rejected: {Path(file_path).name}",
             actor="orchestrator",
-            message_level="WARNING"
+            message_level="WARNING",
         )
-        
-        # Log rejection (could update learning log here)
-        # For now, just leave in Rejected/ as archive
-    
+        # Leave in Rejected/ as archive — no further action
+
     def on_revision_change(self, event_type: str, file_path: str):
         """
-        Handle changes in Needs_Revision/ folder.
-        
-        Args:
-            event_type: 'created', 'deleted', 'moved'
-            file_path: Full path to file
+        Task needs revision. Re-queue up to MAX_RETRIES times.
+        After that, move to Dead_Letter/ and log a warning.
         """
-        if event_type != 'created':
+        if event_type != "created":
             return
-        
-        file_path = Path(file_path)
-        
+
+        path = Path(file_path)
+        if path.suffix != ".md" or path.name.startswith("."):
+            return
+
         logger.write_to_timeline(
-            f"Task needs revision: {file_path.name}",
+            f"Needs revision: {path.name}",
             actor="orchestrator",
-            message_level="WARNING"
+            message_level="WARNING",
         )
-        
-        # Move back to Needs_Action/ with high priority
-        # (Folder Watcher will detect and reprocess)
-        dest = settings.needs_action_path / file_path.name
+
+        # Read task file to check retry count
+        try:
+            content = path.read_text(encoding="utf-8")
+        except Exception as e:
+            logger.log_error(f"Cannot read revision file {path.name}: {e}", actor="orchestrator")
+            return
+
+        # Increment retry count
+        updated_content, new_count = increment_retry_count(content)
+
+        if new_count > MAX_RETRIES:
+            # Too many retries — move to Dead_Letter/
+            dead_letter = settings.vault_path / "Dead_Letter"
+            dead_letter.mkdir(parents=True, exist_ok=True)
+            dest = dead_letter / path.name
+
+            if dest.exists():
+                dest.unlink()
+            shutil.move(str(path), str(dest))
+
+            logger.write_to_timeline(
+                f"DEAD LETTER: {path.name} failed {new_count - 1} times — moved to Dead_Letter/",
+                actor="orchestrator",
+                message_level="WARNING",
+            )
+            return
+
+        # Write updated retry count back to file
+        try:
+            path.write_text(updated_content, encoding="utf-8")
+        except Exception as e:
+            logger.log_error(f"Cannot update retry_count in {path.name}: {e}", actor="orchestrator")
+            return
+
+        # Re-queue to Needs_Action/ — FolderWatcher will detect and reprocess
+        dest = settings.needs_action_path / path.name
         if dest.exists():
             dest.unlink()
-        
-        import shutil
-        shutil.move(str(file_path), str(dest))
-        
+
+        shutil.move(str(path), str(dest))
+
         logger.write_to_timeline(
-            f"Moved to Needs_Action/ for reprocessing: {file_path.name}",
+            f"Re-queued (attempt {new_count}/{MAX_RETRIES}): {path.name}",
             actor="orchestrator",
-            message_level="INFO"
+            message_level="INFO",
         )
-    
-    def move_to_processing(self, file_path: Path):
-        """
-        Move file to Processing/ folder.
-        
-        Args:
-            file_path: Path to file to move
-        """
+
+    # ── Internal helpers ──────────────────────────────────────────────────
+
+    def _move_to_processing(self, file_path: Path):
         dest = settings.processing_path / file_path.name
-        
         if dest.exists():
             dest.unlink()
-        
-        import shutil
         shutil.move(str(file_path), str(dest))
-        
         logger.write_to_timeline(
             f"Moved to Processing/: {file_path.name}",
             actor="orchestrator",
-            message_level="INFO"
+            message_level="INFO",
         )
-    
-    def call_claude_runner(self, file_path: Path):
-        """
-        Call Claude Runner to process task.
 
-        Args:
-            file_path: Path to task file in Processing/
-        """
-        # Build command
-        cmd = [
-            sys.executable,
-            str(project_root / "claude_runner.py"),
-            str(file_path)
-        ]
+    def _call_claude_runner(self, file_path: Path):
+        cmd = [sys.executable, str(project_root / "claude_runner.py"), str(file_path)]
 
         logger.write_to_timeline(
-            f"Calling Claude Runner for: {file_path.name}",
+            f"Calling Claude Runner: {file_path.name}",
             actor="orchestrator",
-            message_level="INFO"
-        )
-        
-        # Log the exact command for debugging
-        logger.write_to_timeline(
-            f"Claude Runner command: {' '.join(cmd)}",
-            actor="orchestrator",
-            message_level="DEBUG"
+            message_level="INFO",
         )
 
-        # Start Claude Runner as separate process
-        # Keep reference to prevent garbage collection
         try:
-            # Use Popen to start process (non-blocking)
-            # Don't capture output - let Claude Runner log directly
-            process = subprocess.Popen(
-                cmd,
-                stdout=None,    # Don't capture - show in console
-                stderr=None,    # Don't capture - show errors
-            )
-            
+            process = subprocess.Popen(cmd)
+
+            if not hasattr(self, "claude_processes"):
+                self.claude_processes = []
+
+            # Prune finished processes to prevent unbounded list growth
+            self.claude_processes = [p for p in self.claude_processes if p.poll() is None]
+            self.claude_processes.append(process)
+
             logger.write_to_timeline(
                 f"Claude Runner started (PID: {process.pid})",
                 actor="orchestrator",
-                message_level="INFO"
+                message_level="INFO",
             )
-            
-            # Store process reference to prevent garbage collection
-            if not hasattr(self, 'claude_processes'):
-                self.claude_processes = []
-            self.claude_processes.append(process)
-            
+
+        except Exception as e:
+            logger.log_error(f"Failed to start Claude Runner: {e}", error=e, actor="orchestrator")
+
+    def _execute_approved_action(self, file_path: Path):
+        """Execute an approved action. Currently moves to Done/ (MCP stub)."""
+        try:
+            dest = settings.done_path / file_path.name
+            if dest.exists():
+                dest.unlink()
+            shutil.move(str(file_path), str(dest))
+            logger.write_to_timeline(
+                f"Approved action executed (stub → Done/): {file_path.name}",
+                actor="orchestrator",
+                message_level="INFO",
+            )
         except Exception as e:
             logger.log_error(
-                f"Failed to call Claude Runner: {e}",
-                error=e,
-                actor="orchestrator"
+                f"Failed to execute approved action: {e}", error=e, actor="orchestrator"
             )
-    
+
     def check_timeouts(self):
-        """Check for timed out tasks (Claude crashed)."""
+        """
+        Detect tasks stuck in Processing/ — means claude_runner crashed
+        before writing a status file or touching any file.
+        """
         now = datetime.now()
-        
+
         for file_path_str, move_time in list(self.file_move_times.items()):
             elapsed = (now - move_time).seconds
-            
+
             if elapsed > self.timeout_seconds:
-                # Timeout! No watcher event = Claude crashed
                 file_path = Path(file_path_str)
-                
+
                 logger.write_to_timeline(
-                    f"Timeout detected for: {file_path.name} ({elapsed}s > {self.timeout_seconds}s)",
+                    f"Timeout: {file_path.name} stuck {elapsed}s > {self.timeout_seconds}s",
                     actor="orchestrator",
-                    message_level="WARNING"
+                    message_level="WARNING",
                 )
-                
-                # Move back to Needs_Action/
-                self.move_back_to_needs_action(file_path)
-                
-                # Clean up tracker
-                del self.file_move_times[file_path_str]
-    
-    def move_back_to_needs_action(self, file_path: Path):
-        """
-        Move file back to Needs_Action/ on timeout.
 
-        Args:
-            file_path: Path to file (should be in Processing/)
-        """
-        # Check if file still exists
+                self._move_back_to_needs_action(file_path)
+
+                # FIX: use pop() not del — on_processing_change() may have
+                # already removed this key when the file move was detected
+                self.file_move_times.pop(file_path_str, None)
+                
+
+    def _move_back_to_needs_action(self, file_path: Path):
         if not file_path.exists():
+            # Claude runner already finished and moved the file — just clean up tracker
             logger.write_to_timeline(
-                f"Timeout check: File already moved (Claude finished): {file_path.name}",
+                f"Timeout resolved — file already processed: {file_path.name}",
                 actor="orchestrator",
-                message_level="INFO"
+                message_level="INFO",
             )
-            # File was already processed by Claude Runner, just clean up tracker
             return
-        
-        dest = settings.needs_action_path / file_path.name
 
+        dest = settings.needs_action_path / file_path.name
         if dest.exists():
             dest.unlink()
-
-        import shutil
         shutil.move(str(file_path), str(dest))
 
         logger.write_to_timeline(
-            f"Timeout - moved back to Needs_Action/: {file_path.name}",
+            f"Timeout — moved back to Needs_Action/: {file_path.name}",
             actor="orchestrator",
-            message_level="WARNING"
+            message_level="WARNING",
         )
-    
-    def execute_approved_action(self, file_path: Path):
-        """
-        Execute approved action.
-        
-        Args:
-            file_path: Path to approved file
-        """
-        # Read approval file to determine action type
-        try:
-            content = file_path.read_text(encoding='utf-8')
-            
-            # Parse approval type from content
-            # For now, just move to Done/ as placeholder
-            # TODO: Implement actual action execution
-            
-            dest = settings.done_path / file_path.name
-            
-            if dest.exists():
-                dest.unlink()
-            
-            import shutil
-            shutil.move(str(file_path), str(dest))
-            
-            logger.write_to_timeline(
-                f"Approved action executed: {file_path.name}",
-                actor="orchestrator",
-                message_level="INFO"
-            )
-            
-        except Exception as e:
-            logger.log_error(
-                f"Failed to execute approved action: {e}",
-                error=e,
-                actor="orchestrator"
-            )
 
 
 def main():
-    """Main entry point."""
     logger.write_to_timeline(
-        "AI Employee Orchestrator v2.0 starting",
+        "AI Employee Orchestrator v2.1 starting",
         actor="orchestrator",
-        message_level="INFO"
+        message_level="INFO",
     )
-    
-    # Ensure vault directories exist
+
     settings.ensure_vault_directories()
-    
-    # Create and start orchestrator
+
     orchestrator = Orchestrator()
     orchestrator.start()
 

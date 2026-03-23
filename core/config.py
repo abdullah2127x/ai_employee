@@ -25,6 +25,11 @@ class Settings(BaseSettings):
             print("Development mode - console output enabled")
     """
 
+    claude_command: str = Field(
+        default="claude",
+        description="Command to invoke Claude Code"
+    )
+
     # ========================================================================
     # Core Settings
     # ========================================================================
