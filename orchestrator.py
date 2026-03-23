@@ -522,7 +522,7 @@ class Orchestrator:
 
                 # FIX: use pop() not del — on_processing_change() may have
                 # already removed this key when the file move was detected
-                self.file_move_times.pop(_str, None)
+                self.file_move_times.pop(file_path_str, None)
                 
 
     def _move_back_to_needs_action(self, file_path: Path):
