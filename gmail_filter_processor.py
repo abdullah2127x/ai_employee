@@ -27,6 +27,7 @@ import json
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
+import email.message
 
 # Add project root to path
 import sys
