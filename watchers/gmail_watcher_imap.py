@@ -313,9 +313,11 @@ class GmailWatcherIMAP:
             # Reconnect if needed
             self._reconnect_if_needed()
             
-            # Search for unread important messages
-            # IMAP search uses different syntax than Gmail
-            status, messages = self.mail.search(None, self.gmail_query)
+            # Search for unread messages
+            # IMAP search syntax: UNREAD, or UNREAD IMPORTANT for Gmail
+            # Note: search() expects separate arguments, not a single string
+            query_parts = self.gmail_query.split()
+            status, messages = self.mail.search(None, *query_parts)
             
             if status != 'OK':
                 logger.write_to_timeline(
