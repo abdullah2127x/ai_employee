@@ -11,19 +11,21 @@
 
 ## 🚀 Quick Start
 
-### 1. Configure Settings
+### 1. Configure Settings in .env
 
-Edit `gmail_filter_processor.py` (lines 23-24):
+Edit `.env` file in project root:
 
-```python
-GMAIL_ADDRESS = "your.email@gmail.com"
-GMAIL_APP_PASSWORD = "xxxx-xxxx-xxxx-xxxx"  # Your 16-char app password
+```env
+# Gmail IMAP Settings
+GMAIL_IMAP_ADDRESS=your.email@gmail.com
+GMAIL_IMAP_APP_PASSWORD=abcdefghijklmnop  # Your 16-char app password (no spaces)
 ```
 
 **Get App Password:**
 1. Go to: https://myaccount.google.com/apppasswords
 2. Create app password for "Mail"
 3. Copy the 16-character password (remove spaces)
+4. Paste in `.env` file
 
 ### 2. Run the Script
 
@@ -32,6 +34,7 @@ python gmail_filter_processor.py
 ```
 
 That's it! The script will:
+- Load credentials from `.env` via settings
 - Connect to Gmail
 - Fetch all unread emails
 - Filter out promotions, social, newsletters
