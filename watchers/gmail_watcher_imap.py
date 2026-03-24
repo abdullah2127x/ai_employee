@@ -441,6 +441,20 @@ class GmailWatcherIMAP:
             self.processed_ids[message['id']] = datetime.now()
             self._save_processed_ids()
             
+            # Mark email as READ in Gmail so it's not fetched again
+            try:
+                self.mail.store(message['id'], '+FLAGS', '\\Seen')
+                logger.write_to_timeline(
+                    f"Marked message {message['id']} as READ",
+                    actor="gmail_watcher_imap",
+                    message_level="DEBUG",
+                )
+            except Exception as e:
+                logger.log_warning(
+                    f"Could not mark message as read: {e}",
+                    actor="gmail_watcher_imap",
+                )
+            
             logger.write_to_timeline(
                 f"Created task file: {filepath.name} | From: {headers['from'][:50]}",
                 actor="gmail_watcher_imap",
