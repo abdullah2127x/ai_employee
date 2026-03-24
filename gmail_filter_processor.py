@@ -28,13 +28,26 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 
+# Add project root to path
+import sys
+project_root = Path(__file__).parent.resolve()
+sys.path.insert(0, str(project_root))
+
+from core.config import settings
+
 # ============================================================================
-# CONFIGURATION
+# CONFIGURATION (from core.config.settings)
 # ============================================================================
 
-# Gmail Account Settings
-GMAIL_ADDRESS = "inayaqureshi3509@gmail.com"
-GMAIL_APP_PASSWORD = "xjiooonxayhniura"  # Your 16-character app password (no spaces)
+# Gmail Account Settings (from .env via settings)
+GMAIL_ADDRESS = settings.gmail_imap_address
+GMAIL_APP_PASSWORD = settings.gmail_imap_app_password
+
+# Validate credentials
+if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
+    print("❌ Error: Gmail credentials not configured in .env file")
+    print("   Set GMAIL_IMAP_ADDRESS and GMAIL_IMAP_APP_PASSWORD in .env")
+    sys.exit(1)
 
 # IMAP Settings
 IMAP_SERVER = "imap.gmail.com"
