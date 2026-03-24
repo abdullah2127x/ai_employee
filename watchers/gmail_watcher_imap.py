@@ -34,6 +34,7 @@ Features:
 """
 
 import email
+import email.message
 import imaplib
 import base64
 import json
