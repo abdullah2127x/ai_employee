@@ -90,19 +90,29 @@ GMAIL_WATCHER_CHECK_INTERVAL=300
 
 ### Change Gmail Query
 
+**Important:** IMAP uses different search syntax than Gmail!
+
 ```env
-# All unread emails
+# All unread emails (recommended)
 GMAIL_WATCHER_QUERY=UNREAD
 
 # Unread from specific sender
-GMAIL_WATCHER_QUERY=(FROM:boss@company.com UNREAD)
+GMAIL_WATCHER_QUERY=FROM:boss@company.com UNREAD
 
 # Unread with subject containing "invoice"
-GMAIL_WATCHER_QUERY=(SUBJECT:invoice UNREAD)
+GMAIL_WATCHER_QUERY=SUBJECT:invoice UNREAD
 
-# Unread important emails (default)
+# Unread important (Gmail-specific, may not work with all accounts)
 GMAIL_WATCHER_QUERY=UNREAD IMPORTANT
 ```
+
+**Gmail vs IMAP Query Syntax:**
+
+| Gmail (OAuth) | IMAP |
+|---------------|------|
+| `is:unread is:important` | `UNREAD IMPORTANT` |
+| `from:boss@company.com` | `FROM:boss@company.com UNREAD` |
+| `subject:invoice` | `SUBJECT:invoice UNREAD` |
 
 ---
 
