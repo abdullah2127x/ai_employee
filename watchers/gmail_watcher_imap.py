@@ -36,6 +36,7 @@ Features:
 import email
 import imaplib
 import base64
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -46,6 +47,10 @@ from utils.logging_manager import LoggingManager
 from utils.task_template import create_email_task
 
 logger = LoggingManager()
+
+# Logs path for append-only logging
+LOGS_PATH = settings.vault_path / "Logs"
+LOGS_PATH.mkdir(parents=True, exist_ok=True)
 
 
 class GmailWatcherIMAP:
@@ -89,6 +94,10 @@ class GmailWatcherIMAP:
         # Track processed message IDs (with timestamps for cleanup)
         self.processed_ids: Dict[str, datetime] = {}
         self.processed_file = self.vault_path / '.gmail_imap_processed_ids.json'
+        
+        # Track processed and skipped emails for logging
+        self.processed_email_details: List[Dict] = []
+        self.skipped_emails: List[Dict] = []
 
         # IMAP connection
         self.mail: Optional[imaplib.IMAP4_SSL] = None
