@@ -122,14 +122,6 @@ class Settings(BaseSettings):
             return Path(v)
         return v
 
-    @field_validator("gmail_address", mode="after")
-    @classmethod
-    def validate_gmail_address(cls, v):
-        """Validate Gmail address if provided."""
-        if v and "@" not in v:
-            raise ValueError("Invalid Gmail address")
-        return v
-
     @field_validator("gmail_imap_address", mode="after")
     @classmethod
     def validate_gmail_imap_address(cls, v):

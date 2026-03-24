@@ -235,18 +235,28 @@ class Orchestrator:
             )
 
         # Start Gmail Watcher in background thread
-        if self.gmail_watcher and self.gmail_watcher.service:
-            self.gmail_watcher_thread = threading.Thread(
-                target=self.gmail_watcher.run,
-                daemon=True,
-                name="GmailWatcher"
-            )
-            self.gmail_watcher_thread.start()
-            logger.write_to_timeline(
-                "Gmail Watcher started (background thread)",
-                actor="orchestrator",
-                message_level="INFO",
-            )
+        if self.gmail_watcher:
+            # Check if watcher is ready (different for IMAP vs OAuth)
+            watcher_ready = False
+            if hasattr(self.gmail_watcher, 'service'):
+                # OAuth mode
+                watcher_ready = self.gmail_watcher.service is not None
+            elif hasattr(self.gmail_watcher, 'mail'):
+                # IMAP mode
+                watcher_ready = self.gmail_watcher.mail is not None
+            
+            if watcher_ready:
+                self.gmail_watcher_thread = threading.Thread(
+                    target=self.gmail_watcher.run,
+                    daemon=True,
+                    name="GmailWatcher"
+                )
+                self.gmail_watcher_thread.start()
+                logger.write_to_timeline(
+                    "Gmail Watcher started (background thread)",
+                    actor="orchestrator",
+                    message_level="INFO",
+                )
 
         # Start folder watchers
         for name, watcher in self.watchers.items():
