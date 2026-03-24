@@ -278,7 +278,7 @@ class GmailWatcherIMAP:
         
         return body if body else "[No content available]"
 
-    def _parse_email_headers(self, raw_email: bytes) -> Dict[str, Any]:
+    def _parse_email_headers(self, raw_email: bytes, gmail_msgid_hex: str = '') -> Dict[str, Any]:
         """Parse raw email bytes and extract headers and body."""
         msg = email.message_from_bytes(raw_email)
         
@@ -289,6 +289,7 @@ class GmailWatcherIMAP:
             'subject': msg.get('Subject', 'No Subject'),
             'date': msg.get('Date', ''),
             'message_id': msg.get('Message-ID', ''),
+            'gmail_msgid_hex': gmail_msgid_hex,  # For Gmail URL
         }
         
         # Parse date
@@ -361,12 +362,31 @@ class GmailWatcherIMAP:
                 )
                 return []
             
-            # Filter out already processed
+            # Filter out already processed and fetch X-GM-MSGID
             new_messages = []
             for msg_id in message_ids:
                 msg_id_str = msg_id.decode('utf-8')
                 if msg_id_str not in self.processed_ids:
-                    new_messages.append({'id': msg_id_str})
+                    # Fetch X-GM-MSGID for this message
+                    try:
+                        status, msg_data = self.mail.uid('FETCH', msg_id, '(X-GM-MSGID)')
+                        gmail_msgid_decimal = None
+                        for item in msg_data:
+                            if isinstance(item, tuple):
+                                item_str = str(item)
+                                if 'X-GM-MSGID' in item_str:
+                                    match = re.search(r'X-GM-MSGID (\d+)', item_str)
+                                    if match:
+                                        gmail_msgid_decimal = match.group(1)
+                                        break
+                        gmail_msgid_hex = format(int(gmail_msgid_decimal), 'x') if gmail_msgid_decimal else msg_id_str
+                    except:
+                        gmail_msgid_hex = msg_id_str
+                    
+                    new_messages.append({
+                        'id': msg_id_str,
+                        'gmail_msgid_hex': gmail_msgid_hex,
+                    })
             
             logger.write_to_timeline(
                 f"Found {len(message_ids)} messages, {len(new_messages)} new",
@@ -414,7 +434,7 @@ class GmailWatcherIMAP:
                 return None
             
             # Parse email
-            email_data = self._parse_email_headers(msg_data[0][1])
+            email_data = self._parse_email_headers(msg_data[0][1], gmail_msgid_hex)
             headers = email_data['headers']
             body = email_data['body']
             received_date = email_data['received_date']
