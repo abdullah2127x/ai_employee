@@ -314,7 +314,8 @@ class GmailFilterProcessor:
             Dict with headers and body, or None on error
         """
         try:
-            status, msg_data = self.mail.uid('FETCH', msg_id, '(RFC822)')
+            # Fetch email with X-GM-MSGID for proper Gmail URL
+            status, msg_data = self.mail.uid('FETCH', msg_id, '(RFC822 X-GM-MSGID)')
             
             if status != 'OK':
                 return None
@@ -322,6 +323,23 @@ class GmailFilterProcessor:
             # Parse email
             raw_email = msg_data[0][1]
             msg = email.message_from_bytes(raw_email)
+            
+            # Extract X-GM-MSGID for Gmail URL (decimal format from IMAP)
+            gmail_msgid_decimal = None
+            for item in msg_data:
+                if isinstance(item, tuple):
+                    # Look for X-GM-MSGID in the response
+                    item_str = str(item)
+                    if 'X-GM-MSGID' in item_str:
+                        # Extract the decimal ID
+                        import re
+                        match = re.search(r'X-GM-MSGID (\d+)', item_str)
+                        if match:
+                            gmail_msgid_decimal = match.group(1)
+                            break
+            
+            # Convert decimal to hex for Gmail URL
+            gmail_msgid_hex = format(int(gmail_msgid_decimal), 'x') if gmail_msgid_decimal else msg_id
             
             # Extract headers
             headers = {
@@ -332,6 +350,7 @@ class GmailFilterProcessor:
                 'message_id': msg.get('Message-ID', ''),
                 'in_reply_to': msg.get('In-Reply-To', ''),  # Thread tracking
                 'references': msg.get('References', ''),     # Thread tracking
+                'gmail_msgid_hex': gmail_msgid_hex,  # Hex format for URL
             }
             
             # Decode body
@@ -444,7 +463,8 @@ class GmailFilterProcessor:
             truncated_body = body[:3000] + "\n\n[Content truncated...]" if len(body) > 3000 else body
             
             # Build task file content
-            gmail_link = f"https://mail.google.com/mail/u/0/#inbox/{msg_id}"
+            gmail_msgid = headers.get('gmail_msgid_hex', msg_id)
+            gmail_link = f"https://mail.google.com/mail/u/0/#inbox/{gmail_msgid}"
             
             task_content = f"""---
 type: email
@@ -457,7 +477,7 @@ priority: {priority}
 status: pending
 filter_reason: {reason}
 is_reply: {str(is_reply).lower()}
-gmail_message_id: {msg_id}
+gmail_message_id: {gmail_msgid}
 gmail_link: {gmail_link}
 
 # AI Processing Status
@@ -564,17 +584,32 @@ ai_summary: [PENDING]
             msg = email_data['raw_msg']
             should_process, reason = self.should_process_email(msg, msg_id)
             
+            # Extract headers for tracking (before creating task file)
+            headers = email_data['headers']
+            received_date = email_data['received_date']
+            
+            # Determine priority for tracking
+            priority = "normal"
+            subject_lower = headers['subject'].lower()
+            if any(word in subject_lower for word in ['urgent', 'asap', 'emergency']):
+                priority = "urgent"
+            elif any(word in subject_lower for word in ['invoice', 'payment', 'billing']):
+                priority = "high"
+            elif 'interview' in subject_lower or 'meeting' in subject_lower:
+                priority = "high"
+            
             if not should_process:
                 print(f"⊘ {reason}")
                 self.skipped_count += 1
                 
                 # Track skipped email for report
+                gmail_msgid = headers.get('gmail_msgid_hex', msg_id)
                 self.skipped_emails.append({
                     'message_id': msg_id,
                     'from': msg.get('From', 'Unknown'),
                     'subject': msg.get('Subject', 'No Subject'),
                     'reason': reason,
-                    'gmail_link': f"https://mail.google.com/mail/u/0/#inbox/{msg_id}",
+                    'gmail_link': f"https://mail.google.com/mail/u/0/#inbox/{gmail_msgid}",
                     'processed_at': datetime.now().isoformat(),
                 })
                 
@@ -592,6 +627,16 @@ ai_summary: [PENDING]
                 self.processed_ids[msg_id] = f"processed: {filepath.name}"
                 self.processed_count += 1
                 
+                # Extract task_id from filename (remove .md extension)
+                task_id = filepath.stem
+                
+                # Detect if this is a reply
+                is_reply = bool(headers.get('in_reply_to') or headers.get('references'))
+                
+                # Get Gmail message ID in hex format for URL
+                gmail_msgid = headers.get('gmail_msgid_hex', msg_id)
+                gmail_link = f"https://mail.google.com/mail/u/0/#inbox/{gmail_msgid}"
+                
                 # Track processed email details for index
                 self.processed_email_details.append({
                     'task_id': task_id,
@@ -602,7 +647,7 @@ ai_summary: [PENDING]
                     'priority': priority,
                     'filter_reason': reason,
                     'is_reply': is_reply,
-                    'gmail_link': f"https://mail.google.com/mail/u/0/#inbox/{msg_id}",
+                    'gmail_link': gmail_link,
                     'task_file': filepath.name,
                     'processed_at': datetime.now().isoformat(),
                 })
