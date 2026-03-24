@@ -78,6 +78,21 @@ FILTER_CONFIG = {
         "youtube.com",
         "medium.com",
         "substack.com",
+        "reddit.com",
+        "quora.com",
+    ],
+    
+    # Sender domains to ALWAYS PROCESS (business-critical)
+    "business_domains": [
+        "amazon.com",
+        "aws.amazon.com",
+        "google.com",
+        "microsoft.com",
+        "apple.com",
+        "paypal.com",
+        "stripe.com",
+        "bank",  # Any bank domain
+        "gov",  # Government domains
     ],
     
     # Subject keywords to SKIP
@@ -240,7 +255,13 @@ class GmailFilterProcessor:
                 return False, f"Skipped: {category.title()} category"
         
         # Check sender domain
+        from_addr_lower = from_addr.lower()
         from_domain = from_addr.split('@')[-1].strip('>').lower() if '@' in from_addr else ''
+        
+        # BUSINESS DOMAINS - Always process (Amazon, Google, Microsoft, banks, gov)
+        for business_domain in FILTER_CONFIG['business_domains']:
+            if business_domain in from_domain:
+                return True, f"Business domain: {business_domain}"
         
         # Skip known automated senders
         for domain in FILTER_CONFIG['skip_domains']:
@@ -392,9 +413,11 @@ class GmailFilterProcessor:
             elif 'interview' in subject_lower or 'meeting' in subject_lower:
                 priority = "high"
             
-            # Generate task ID
+            # Generate task ID (truncate subject to avoid Windows path length issues)
             timestamp = received_date.strftime('%Y%m%d_%H%M%S')
-            safe_subject = headers['subject'][:50].replace(' ', '_').replace('/', '_')
+            safe_subject = headers['subject'][:30].replace(' ', '_').replace('/', '_').replace('\\', '_')
+            # Remove special characters that cause Windows issues
+            safe_subject = ''.join(c for c in safe_subject if c.isalnum() or c in ['_', '-'])
             task_id = f"email_{timestamp}_{safe_subject}"
             
             # Truncate body for task file (max 3000 chars)
