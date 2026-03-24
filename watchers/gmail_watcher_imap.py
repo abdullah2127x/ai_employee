@@ -169,8 +169,9 @@ class GmailWatcherIMAP:
             # Connect to IMAP server (SSL)
             self.mail = imaplib.IMAP4_SSL(self.imap_server, self.imap_port)
             
-            # Login with app password
-            self.mail.login(self.email_address, self.app_password)
+            # Login with app password (remove spaces if any)
+            clean_password = self.app_password.replace(' ', '')
+            self.mail.login(self.email_address, clean_password)
             
             # Select inbox (read-only mode for safety)
             self.mail.select('INBOX', readonly=True)
@@ -179,6 +180,11 @@ class GmailWatcherIMAP:
                 f"Gmail IMAP connected | Server: {self.imap_server}:{self.imap_port}",
                 actor="gmail_watcher_imap",
                 message_level="INFO",
+            )
+            logger.write_to_timeline(
+                f"Gmail IMAP capabilities: {self.mail.capabilities}",
+                actor="gmail_watcher_imap",
+                message_level="DEBUG",
             )
 
         except imaplib.IMAP4.error as e:
@@ -313,17 +319,24 @@ class GmailWatcherIMAP:
             # Reconnect if needed
             self._reconnect_if_needed()
             
-            # Search for unread messages
-            # IMAP search syntax: UNREAD, or UNREAD IMPORTANT for Gmail
-            # Note: search() expects separate arguments, not a single string
+            # Search for unread messages using UID SEARCH (more reliable than regular SEARCH)
+            # IMAP search syntax: UNSEEN (or UNREAD for Gmail)
+            # Note: Using uid('SEARCH', ...) instead of search() for better Gmail compatibility
             query_parts = self.gmail_query.split()
-            status, messages = self.mail.search(None, *query_parts)
+            
+            # Debug: Log the actual search command
+            logger.write_to_timeline(
+                f"IMAP UID SEARCH command: uid('SEARCH', {', '.join(repr(p) for p in query_parts)})",
+                actor="gmail_watcher_imap",
+                message_level="DEBUG",
+            )
+            
+            status, messages = self.mail.uid('SEARCH', *query_parts)
             
             if status != 'OK':
-                logger.write_to_timeline(
-                    f"IMAP search failed: {status}",
+                logger.log_error(
+                    f"IMAP UID search failed: {status} | Query: {self.gmail_query} | Parts: {query_parts}",
                     actor="gmail_watcher_imap",
-                    message_level="WARNING",
                 )
                 return []
             
