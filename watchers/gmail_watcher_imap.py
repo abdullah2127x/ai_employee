@@ -423,8 +423,8 @@ class GmailWatcherIMAP:
             return None
 
         try:
-            # Fetch message by ID
-            status, msg_data = self.mail.fetch(message['id'], '(RFC822)')
+            # Fetch full message with X-GM-MSGID
+            status, msg_data = self.mail.uid('FETCH', message['id'], '(RFC822 X-GM-MSGID)')
             
             if status != 'OK':
                 logger.log_warning(
@@ -432,6 +432,18 @@ class GmailWatcherIMAP:
                     actor="gmail_watcher_imap",
                 )
                 return None
+            
+            # Extract X-GM-MSGID
+            gmail_msgid_decimal = None
+            for item in msg_data:
+                if isinstance(item, tuple):
+                    item_str = str(item)
+                    if 'X-GM-MSGID' in item_str:
+                        match = re.search(r'X-GM-MSGID (\d+)', item_str)
+                        if match:
+                            gmail_msgid_decimal = match.group(1)
+                            break
+            gmail_msgid_hex = format(int(gmail_msgid_decimal), 'x') if gmail_msgid_decimal else message['id']
             
             # Parse email
             email_data = self._parse_email_headers(msg_data[0][1], gmail_msgid_hex)
@@ -473,7 +485,8 @@ class GmailWatcherIMAP:
             
             # Mark email as READ in Gmail so it's not fetched again
             try:
-                self.mail.store(message['id'], '+FLAGS', '\\Seen')
+                # Use uid('STORE') for UID-based operations
+                self.mail.uid('STORE', message['id'], '+FLAGS', '\\Seen')
                 logger.write_to_timeline(
                     f"Marked message {message['id']} as READ",
                     actor="gmail_watcher_imap",
