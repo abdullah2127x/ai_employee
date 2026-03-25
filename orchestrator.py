@@ -51,6 +51,9 @@ logger = LoggingManager()
 # Maximum times a task is retried from Needs_Revision before Dead_Letter
 MAX_RETRIES = 3
 
+# Maximum concurrent tasks being processed at once
+MAX_CONCURRENT_TASKS = 3
+
 
 def cleanup_stale_prompt_files():
     """
@@ -88,6 +91,142 @@ def cleanup_stale_prompt_files():
         )
 
 
+def startup_cleanup_needs_action():
+    """
+    Move existing files from Needs_Action/ to Processing/ on startup.
+    Respects MAX_CONCURRENT_TASKS limit to avoid overwhelming Claude.
+    
+    Returns:
+        int: Number of files moved
+    """
+    needs_action = settings.needs_action_path
+    processing = settings.processing_path
+    
+    # Ensure Processing/ exists
+    processing.mkdir(parents=True, exist_ok=True)
+    
+    # FIRST: Move ALL files from Processing/ back to Needs_Action/
+    # These are orphaned files from previous run (server crashed/restarted)
+    # Let the normal flow handle them (with concurrency control)
+    orphaned_count = 0
+    for md_file in list(processing.glob("*.md")):
+        try:
+            dest = needs_action / md_file.name
+            shutil.move(str(md_file), str(dest))
+            logger.write_to_timeline(
+                f"Startup: Recovered {md_file.name} from Processing/ → Needs_Action/",
+                actor="orchestrator",
+                message_level="WARNING",
+            )
+            orphaned_count += 1
+        except Exception as e:
+            logger.log_error(
+                f"Failed to recover orphaned file {md_file.name}: {e}",
+                actor="orchestrator",
+            )
+    
+    if orphaned_count > 0:
+        logger.write_to_timeline(
+            f"Startup: Recovered {orphaned_count} orphaned file(s) from previous run",
+            actor="orchestrator",
+            message_level="INFO",
+        )
+    
+    # Count current processing tasks (should be 0 after recovery)
+    current_processing = len(list(processing.glob("*.md")))
+    
+    # Calculate available slots
+    available_slots = MAX_CONCURRENT_TASKS - current_processing
+    
+    if available_slots <= 0:
+        logger.write_to_timeline(
+            f"Startup: Processing/ is full ({current_processing}/{MAX_CONCURRENT_TASKS}), no slots available",
+            actor="orchestrator",
+            message_level="INFO",
+        )
+        return 0
+    
+    # Get all .md files in Needs_Action/, sorted by modification time (oldest first)
+    files = sorted(
+        [f for f in needs_action.glob("*.md") if not f.name.startswith(".")],
+        key=lambda f: f.stat().st_mtime
+    )
+    
+    if not files:
+        logger.write_to_timeline(
+            "Startup: No existing files in Needs_Action/",
+            actor="orchestrator",
+            message_level="INFO",
+        )
+        return 0
+    
+    # Move only up to available slots
+    files_to_move = files[:available_slots]
+    moved_count = 0
+    
+    for md_file in files_to_move:
+        try:
+            dest = processing / md_file.name
+            shutil.move(str(md_file), str(dest))
+            logger.write_to_timeline(
+                f"Startup: Moved {md_file.name} to Processing/ ({moved_count + 1}/{available_slots})",
+                actor="orchestrator",
+                message_level="INFO",
+            )
+            moved_count += 1
+            
+            # Start Claude Runner for this file
+            cmd = [sys.executable, str(project_root / "claude_runner.py"), str(dest)]
+            logger.write_to_timeline(
+                f"Startup: Calling Claude Runner for {md_file.name}",
+                actor="orchestrator",
+                message_level="INFO",
+            )
+            process = subprocess.Popen(cmd)
+            logger.write_to_timeline(
+                f"Startup: Claude Runner started (PID: {process.pid})",
+                actor="orchestrator",
+                message_level="INFO",
+            )
+            
+        except Exception as e:
+            logger.log_error(
+                f"Failed to move {md_file.name}: {e}",
+                actor="orchestrator",
+            )
+    
+    remaining = len(files) - moved_count
+    logger.write_to_timeline(
+        f"Startup cleanup: Moved {moved_count} files to Processing/, {remaining} remaining in Needs_Action/",
+        actor="orchestrator",
+        message_level="INFO",
+    )
+    
+    return moved_count
+
+
+def get_current_processing_count():
+    """
+    Get the number of files currently in Processing/.
+    
+    Returns:
+        int: Number of files being processed
+    """
+    processing = settings.processing_path
+    return len(list(processing.glob("*.md")))
+
+
+def should_process_more():
+    """
+    Check if we can process more files (under concurrency limit).
+    
+    Returns:
+        bool: True if we can process more files
+    """
+    current = get_current_processing_count()
+    return current < MAX_CONCURRENT_TASKS
+
+
 class Orchestrator:
     """
     AI Employee Orchestrator — manages all workflow folders and subprocesses.
@@ -103,7 +242,7 @@ class Orchestrator:
 
     def __init__(self):
         self.file_move_times: Dict[str, datetime] = {}
-        self.timeout_seconds = 300  # Set to 300 (5 min) for production
+        self.timeout_seconds = 100  # Set to 300 (5 min) for production
 
         self.observer_threads = []
 
@@ -226,6 +365,23 @@ class Orchestrator:
             "Orchestrator starting", actor="orchestrator", message_level="INFO"
         )
 
+        # Startup cleanup: Move existing files from Needs_Action/ to Processing/
+        cleanup_stale_prompt_files()
+        moved_count = startup_cleanup_needs_action()
+        
+        if moved_count > 0:
+            logger.write_to_timeline(
+                f"Startup cleanup complete: Moved {moved_count} files to Processing/",
+                actor="orchestrator",
+                message_level="INFO",
+            )
+        else:
+            logger.write_to_timeline(
+                "Startup cleanup: No files to move",
+                actor="orchestrator",
+                message_level="INFO",
+            )
+
         # Start Filesystem Watcher
         if self.filesystem_watcher:
             t = threading.Thread(target=self.filesystem_watcher.run, daemon=True)
@@ -244,7 +400,7 @@ class Orchestrator:
             elif hasattr(self.gmail_watcher, 'mail'):
                 # IMAP mode
                 watcher_ready = self.gmail_watcher.mail is not None
-            
+
             if watcher_ready:
                 self.gmail_watcher_thread = threading.Thread(
                     target=self.gmail_watcher.run,
@@ -291,7 +447,12 @@ class Orchestrator:
 
         try:
             while True:
-                time.sleep(60)
+                time.sleep(10)  # Check every 10 seconds (reduced from 60)
+                
+                # Check if we can process more files from Needs_Action/
+                if should_process_more():
+                    self._process_waiting_files()
+                
                 self.check_timeouts()
         except KeyboardInterrupt:
             logger.write_to_timeline(
@@ -309,11 +470,25 @@ class Orchestrator:
     # ── Folder callbacks ──────────────────────────────────────────────────
 
     def on_needs_action_change(self, event_type: str, file_path: str):
+        """
+        New file in Needs_Action/ — move to Processing/ if under concurrency limit.
+        """
         if event_type != "created":
             return
 
         path = Path(file_path)
         if path.suffix != ".md" or path.name.startswith("."):
+            return
+
+        # Check concurrency limit BEFORE moving
+        if not should_process_more():
+            current = get_current_processing_count()
+            logger.write_to_timeline(
+                f"Concurrency limit reached ({current}/{MAX_CONCURRENT_TASKS}), "
+                f"{path.name} waiting in Needs_Action/",
+                actor="orchestrator",
+                message_level="INFO",
+            )
             return
 
         logger.write_to_timeline(
@@ -327,6 +502,51 @@ class Orchestrator:
         processing_path = settings.processing_path / path.name
         self.file_move_times[str(processing_path)] = datetime.now()
         self._call_claude_runner(processing_path)
+
+    def _process_waiting_files(self):
+        """
+        Process waiting files from Needs_Action/ when concurrency slots become available.
+        Called periodically from main loop.
+        """
+        needs_action = settings.needs_action_path
+        processing = settings.processing_path
+        
+        # Get all .md files in Needs_Action/, sorted by modification time (oldest first)
+        files = sorted(
+            [f for f in needs_action.glob("*.md") if not f.name.startswith(".")],
+            key=lambda f: f.stat().st_mtime
+        )
+        
+        if not files:
+            return
+        
+        # Calculate how many we can move
+        current_processing = get_current_processing_count()
+        available_slots = MAX_CONCURRENT_TASKS - current_processing
+        
+        if available_slots <= 0:
+            return
+        
+        # Move up to available_slots files (oldest first)
+        files_to_move = files[:available_slots]
+        
+        for md_file in files_to_move:
+            try:
+                dest = processing / md_file.name
+                shutil.move(str(md_file), str(dest))
+                logger.write_to_timeline(
+                    f"Moved {md_file.name} to Processing/ (slot available)",
+                    actor="orchestrator",
+                    message_level="INFO",
+                )
+                
+                self.file_move_times[str(dest)] = datetime.now()
+                self._call_claude_runner(dest)
+            except Exception as e:
+                logger.log_error(
+                    f"Failed to move {md_file.name}: {e}",
+                    actor="orchestrator",
+                )
 
     def on_processing_change(self, event_type: str, file_path: str):
         """File left Processing/ — Claude runner finished (or timed out)."""

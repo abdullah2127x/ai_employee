@@ -1,0 +1,43 @@
+{
+  "1858670035783839761": {
+    "status": "skipped",
+    "timestamp": "2026-03-25T08:10:06.009875",
+    "reason": "Skipped: github.com (automated sender)"
+  },
+  "1860577732689980861": {
+    "status": "processed",
+    "timestamp": "2026-03-25T08:10:07.900374",
+    "reason": "Priority: gmail.com (personal email)",
+    "task_file": "email_20260325_014623_Re__going_first_mail_from_inaya_to_abdul"
+  },
+  "1830306415088255922": {
+    "status": "processed",
+    "timestamp": "2026-03-25T08:28:08.624610",
+    "reason": "Business domain: google.com",
+    "task_file": "email_20250424_103658___UTF-8_Q__E2_9A_A0_EF_B8_8F_Your_Gmail_"
+  },
+  "1853900672687867205": {
+    "status": "processed",
+    "timestamp": "2026-03-25T08:28:09.370197",
+    "reason": "Priority: gmail.com (personal email)",
+    "task_file": "email_20260110_085725_test_by_abdullah_qureshi"
+  },
+  "1854288823686982093": {
+    "status": "processed",
+    "timestamp": "2026-03-25T08:28:10.084350",
+    "reason": "Priority: gmail.com (personal email)",
+    "task_file": "email_20260114_154624_Re__notifying_email_from_abdullah"
+  },
+  "1854291200348984601": {
+    "status": "processed",
+    "timestamp": "2026-03-25T08:28:13.147859",
+    "reason": "Priority: gmail.com (personal email)",
+    "task_file": "email_20260114_162434_Testing_with_attachment_and_text"
+  },
+  "1860577780937817295": {
+    "status": "processed",
+    "timestamp": "2026-03-25T08:28:13.893561",
+    "reason": "Priority: gmail.com (personal email)",
+    "task_file": "email_20260325_014708_sending_first_mail_from_abdullah_to_inay"
+  }
+}
