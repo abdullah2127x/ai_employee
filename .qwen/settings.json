@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(findstr *)",
+      "Bash(dir *)",
+      "Bash(python *)",
+      "Bash(type *)",
+      "Bash(powershell *)"
+    ]
+  },
+  "$version": 3
+}
